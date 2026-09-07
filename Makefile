@@ -6,8 +6,12 @@ BUILD_DIR ?= build
 
 HELLO_TARGET := $(BUILD_DIR)/hello
 MEMORY_TARGET := $(BUILD_DIR)/memory_layout
+OWNERSHIP_TARGET := $(BUILD_DIR)/ownership
 
-TARGETS := $(HELLO_TARGET) $(MEMORY_TARGET)
+TARGETS := \
+	$(HELLO_TARGET) \
+	$(MEMORY_TARGET) \
+	$(OWNERSHIP_TARGET)
 
 .PHONY: all clean test
 
@@ -22,8 +26,12 @@ $(HELLO_TARGET): src/hello.c | $(BUILD_DIR)
 $(MEMORY_TARGET): src/memory_layout.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
+$(OWNERSHIP_TARGET): src/ownership.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
 test: all
 	@output=`$(HELLO_TARGET)`; test "$$output" = "Linux systems project is ready."
+	@$(OWNERSHIP_TARGET) >/dev/null
 	@echo "All checks passed."
 
 clean:
