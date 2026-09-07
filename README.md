@@ -21,9 +21,9 @@ file descriptor、system call、socket、signal、thread、`mmap`、`fork / exec
 C17 のbuild、test、CIを実行できる最小構成です。以降のcommitで、検証可能な
 小さな実装と、その挙動を確認した記録を追加します。
 
-## 必要な環境
+## 環境
 
-- Linux（Windows では WSL2 の Ubuntu を推奨）
+- Linux
 - GCC または Clang
 - GNU Make
 - GDB
