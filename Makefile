@@ -1,21 +1,29 @@
 CC ?= cc
 CPPFLAGS ?= -D_POSIX_C_SOURCE=200809L
 CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Werror -g3 -O0
+
 BUILD_DIR ?= build
-TARGET := $(BUILD_DIR)/hello
+
+HELLO_TARGET := $(BUILD_DIR)/hello
+MEMORY_TARGET := $(BUILD_DIR)/memory_layout
+
+TARGETS := $(HELLO_TARGET) $(MEMORY_TARGET)
 
 .PHONY: all clean test
 
-all: $(TARGET)
+all: $(TARGETS)
 
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(TARGET): src/hello.c | $(BUILD_DIR)
+$(HELLO_TARGET): src/hello.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(MEMORY_TARGET): src/memory_layout.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 test: all
-	@output=`$(TARGET)`; test "$$output" = "Linux systems project is ready."
+	@output=`$(HELLO_TARGET)`; test "$$output" = "Linux systems project is ready."
 	@echo "All checks passed."
 
 clean:
