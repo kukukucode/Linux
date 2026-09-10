@@ -43,6 +43,7 @@ static int restore_child_signals(void)
 static int run_command(
     char *argv[],
     pid_t shell_pgid,
+    const char *input_path,
     const char *output_path
 )
 {
@@ -54,15 +55,61 @@ static int run_command(
     }
 
     if (child_pid == 0) {
+        /*
+         * Put this command in its own process group.
+         */
         if (setpgid(0, 0) == -1) {
             fprintf(stderr, "child setpgid failed: %s\n", strerror(errno));
             _exit(127);
         }
 
+        /*
+         * The shell ignores some terminal signals.
+         * The child restores their normal behavior before exec().
+         */
         if (restore_child_signals() == -1) {
             _exit(127);
         }
 
+        /*
+         * Input redirection:
+         *
+         *     command < file
+         *
+         * Make FD 0 point to the file.
+         */
+        if (input_path != NULL) {
+            int fd = open(input_path, O_RDONLY);
+
+            if (fd == -1) {
+                fprintf(
+                    stderr,
+                    "mini-shell: %s: %s\n",
+                    input_path,
+                    strerror(errno)
+                );
+                _exit(127);
+            }
+
+            if (dup2(fd, STDIN_FILENO) == -1) {
+                fprintf(stderr, "dup2 failed: %s\n", strerror(errno));
+                close(fd);
+                _exit(127);
+            }
+
+            if (close(fd) == -1) {
+                fprintf(stderr, "close failed: %s\n", strerror(errno));
+                _exit(127);
+            }
+        }
+
+        /*
+         * Output redirection:
+         *
+         *     command > file
+         *
+         * Make FD 1 point to the file.
+         */
         if (output_path != NULL) {
             int fd = open(
                 output_path,
@@ -92,6 +139,9 @@ static int run_command(
             }
         }
 
+        /*
+         * Search PATH and replace the child process image.
+         */
         execvp(argv[0], argv);
 
         fprintf(
@@ -104,11 +154,18 @@ static int run_command(
         _exit(127);
     }
 
+    /*
+     * Parent also sets the child's PGID.
+     * This avoids depending on which process runs first.
+     */
     if (setpgid(child_pid, child_pid) == -1) {
         fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
         return -1;
     }
 
+    /*
+     * Give the terminal to the foreground command.
+     */
     if (tcsetpgrp(STDIN_FILENO, child_pid) == -1) {
         fprintf(stderr, "tcsetpgrp child failed: %s\n", strerror(errno));
         return -1;
@@ -131,6 +188,10 @@ static int run_command(
         break;
     }
 
+    /*
+     * The child exited, was killed, or stopped.
+     * Give the terminal back to the shell.
+     */
     if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
         fprintf(stderr, "tcsetpgrp shell failed: %s\n", strerror(errno));
         return -1;
@@ -152,6 +213,12 @@ static int run_command(
             WSTOPSIG(status)
         );
 
+        /*
+         * Temporary behavior.
+         *
+         * Later, jobs/fg/bg will keep this job instead of
+         * immediately destroying it.
+         */
         if (kill(-child_pid, SIGCONT) == -1) {
             fprintf(stderr, "SIGCONT failed: %s\n", strerror(errno));
             return -1;
@@ -184,6 +251,10 @@ int main(void)
 
     pid_t shell_pgid = getpgrp();
 
+    /*
+     * The interactive shell survives terminal-generated signals.
+     * Foreground children restore their default behavior.
+     */
     if (set_signal(SIGINT, SIG_IGN) == -1 ||
         set_signal(SIGTSTP, SIG_IGN) == -1 ||
         set_signal(SIGTTOU, SIG_IGN) == -1) {
@@ -214,14 +285,49 @@ int main(void)
 
         char *argv[MAX_ARGS];
         size_t argc = 0;
+
+        char *input_path = NULL;
         char *output_path = NULL;
+
         int syntax_error = 0;
 
         char *saveptr = NULL;
         char *token = strtok_r(line, " \t\n", &saveptr);
 
         while (token != NULL) {
-            if (strcmp(token, ">") == 0) {
+            /*
+             * Input redirection.
+             */
+            if (strcmp(token, "<") == 0) {
+                if (input_path != NULL) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: multiple input redirects\n"
+                    );
+                    syntax_error = 1;
+                    break;
+                }
+
+                token = strtok_r(NULL, " \t\n", &saveptr);
+
+                if (token == NULL ||
+                    strcmp(token, "<") == 0 ||
+                    strcmp(token, ">") == 0) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: expected filename after <\n"
+                    );
+                    syntax_error = 1;
+                    break;
+                }
+
+                input_path = token;
+            }
+
+            /*
+             * Output redirection.
+             */
+            else if (strcmp(token, ">") == 0) {
                 if (output_path != NULL) {
                     fprintf(
                         stderr,
@@ -233,7 +339,9 @@ int main(void)
 
                 token = strtok_r(NULL, " \t\n", &saveptr);
 
-                if (token == NULL || strcmp(token, ">") == 0) {
+                if (token == NULL ||
+                    strcmp(token, "<") == 0 ||
+                    strcmp(token, ">") == 0) {
                     fprintf(
                         stderr,
                         "mini-shell: expected filename after >\n"
@@ -243,9 +351,17 @@ int main(void)
                 }
 
                 output_path = token;
-            } else {
+            }
+
+            /*
+             * Normal command argument.
+             */
+            else {
                 if (argc >= MAX_ARGS - 1) {
-                    fprintf(stderr, "mini-shell: too many arguments\n");
+                    fprintf(
+                        stderr,
+                        "mini-shell: too many arguments\n"
+                    );
                     syntax_error = 1;
                     break;
                 }
@@ -266,8 +382,11 @@ int main(void)
             continue;
         }
 
+        /*
+         * Builtin: exit
+         */
         if (strcmp(argv[0], "exit") == 0) {
-            if (output_path != NULL) {
+            if (input_path != NULL || output_path != NULL) {
                 fprintf(
                     stderr,
                     "mini-shell: redirection for builtins "
@@ -279,8 +398,11 @@ int main(void)
             break;
         }
 
+        /*
+         * Builtin: cd
+         */
         if (strcmp(argv[0], "cd") == 0) {
-            if (output_path != NULL) {
+            if (input_path != NULL || output_path != NULL) {
                 fprintf(
                     stderr,
                     "mini-shell: redirection for builtins "
@@ -325,7 +447,15 @@ int main(void)
             continue;
         }
 
-        if (run_command(argv, shell_pgid, output_path) == -1) {
+        /*
+         * External command.
+         */
+        if (run_command(
+                argv,
+                shell_pgid,
+                input_path,
+                output_path
+            ) == -1) {
             free(line);
             return EXIT_FAILURE;
         }
