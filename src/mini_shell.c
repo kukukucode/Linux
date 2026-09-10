@@ -210,11 +210,42 @@ int main(void)
             continue;
         }
 
-        if (strcmp(argv[0], "exit") == 0) {
-            break;
-        }
+if (strcmp(argv[0], "exit") == 0) {
+    break;
+}
 
-        if (run_command(argv, shell_pgid) == -1) {
+if (strcmp(argv[0], "cd") == 0) {
+    if (argc > 2) {
+        fprintf(stderr, "mini-shell: cd: too many arguments\n");
+        continue;
+    }
+
+    const char *directory;
+
+    if (argc == 1) {
+        directory = getenv("HOME");
+
+        if (directory == NULL) {
+            fprintf(stderr, "mini-shell: cd: HOME is not set\n");
+            continue;
+        }
+    } else {
+        directory = argv[1];
+    }
+
+    if (chdir(directory) == -1) {
+        fprintf(
+            stderr,
+            "mini-shell: cd: %s: %s\n",
+            directory,
+            strerror(errno)
+        );
+    }
+
+    continue;
+}
+
+if (run_command(argv, shell_pgid) == -1) {
             free(line);
             return EXIT_FAILURE;
         }
