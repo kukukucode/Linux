@@ -22,7 +22,24 @@ static int set_signal(int signal_number, void (*handler)(int))
     return sigaction(signal_number, &action, NULL);
 }
 
-static int run_command(char *argv[])
+static int restore_child_signals(void)
+{
+    if (set_signal(SIGINT, SIG_DFL) == -1) {
+        return -1;
+    }
+
+    if (set_signal(SIGTSTP, SIG_DFL) == -1) {
+        return -1;
+    }
+
+    if (set_signal(SIGTTOU, SIG_DFL) == -1) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int run_command(char *argv[], pid_t shell_pgid)
 {
     pid_t child_pid = fork();
 
@@ -32,11 +49,12 @@ static int run_command(char *argv[])
     }
 
     if (child_pid == 0) {
-        /*
-         * The shell ignores SIGINT so Ctrl-C does not kill the shell.
-         * The child restores the normal behavior before exec().
-         */
-        if (set_signal(SIGINT, SIG_DFL) == -1) {
+        if (setpgid(0, 0) == -1) {
+            fprintf(stderr, "child setpgid failed: %s\n", strerror(errno));
+            _exit(127);
+        }
+
+        if (restore_child_signals() == -1) {
             _exit(127);
         }
 
@@ -52,10 +70,27 @@ static int run_command(char *argv[])
         _exit(127);
     }
 
+    /*
+     * Call setpgid() in the parent too.
+     * This avoids depending on whether parent or child runs first.
+     */
+    if (setpgid(child_pid, child_pid) == -1) {
+        fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    /*
+     * Give the terminal to the child's process group.
+     */
+    if (tcsetpgrp(STDIN_FILENO, child_pid) == -1) {
+        fprintf(stderr, "tcsetpgrp child failed: %s\n", strerror(errno));
+        return -1;
+    }
+
     int status;
 
     for (;;) {
-        pid_t result = waitpid(child_pid, &status, 0);
+        pid_t result = waitpid(child_pid, &status, WUNTRACED);
 
         if (result == -1) {
             if (errno == EINTR) {
@@ -69,6 +104,15 @@ static int run_command(char *argv[])
         break;
     }
 
+    /*
+     * Whether the command exited, was killed, or stopped,
+     * the shell needs its terminal back.
+     */
+    if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
+        fprintf(stderr, "tcsetpgrp shell failed: %s\n", strerror(errno));
+        return -1;
+    }
+
     if (WIFEXITED(status)) {
         printf(
             "[shell] child exited with status %d\n",
@@ -79,6 +123,30 @@ static int run_command(char *argv[])
             "[shell] child terminated by signal %d\n",
             WTERMSIG(status)
         );
+    } else if (WIFSTOPPED(status)) {
+        printf(
+            "[shell] child stopped by signal %d\n",
+            WSTOPSIG(status)
+        );
+
+        /*
+         * Temporary cleanup.
+         * Later, jobs/fg/bg will keep stopped jobs instead.
+         */
+        if (kill(-child_pid, SIGCONT) == -1) {
+            fprintf(stderr, "SIGCONT failed: %s\n", strerror(errno));
+            return -1;
+        }
+
+        if (kill(-child_pid, SIGTERM) == -1) {
+            fprintf(stderr, "SIGTERM failed: %s\n", strerror(errno));
+            return -1;
+        }
+
+        if (waitpid(child_pid, NULL, 0) == -1) {
+            fprintf(stderr, "cleanup waitpid failed: %s\n", strerror(errno));
+            return -1;
+        }
     }
 
     return 0;
@@ -86,7 +154,20 @@ static int run_command(char *argv[])
 
 int main(void)
 {
-    if (set_signal(SIGINT, SIG_IGN) == -1) {
+    if (!isatty(STDIN_FILENO)) {
+        fprintf(stderr, "mini-shell: stdin is not a terminal\n");
+        return EXIT_FAILURE;
+    }
+
+    pid_t shell_pgid = getpgrp();
+
+    /*
+     * The shell itself should survive terminal-generated job-control
+     * signals while a child owns the terminal.
+     */
+    if (set_signal(SIGINT, SIG_IGN) == -1 ||
+        set_signal(SIGTSTP, SIG_IGN) == -1 ||
+        set_signal(SIGTTOU, SIG_IGN) == -1) {
         fprintf(stderr, "sigaction failed: %s\n", strerror(errno));
         return EXIT_FAILURE;
     }
@@ -133,7 +214,7 @@ int main(void)
             break;
         }
 
-        if (run_command(argv) == -1) {
+        if (run_command(argv, shell_pgid) == -1) {
             free(line);
             return EXIT_FAILURE;
         }
