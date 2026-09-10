@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +40,11 @@ static int restore_child_signals(void)
     return 0;
 }
 
-static int run_command(char *argv[], pid_t shell_pgid)
+static int run_command(
+    char *argv[],
+    pid_t shell_pgid,
+    const char *output_path
+)
 {
     pid_t child_pid = fork();
 
@@ -58,6 +63,35 @@ static int run_command(char *argv[], pid_t shell_pgid)
             _exit(127);
         }
 
+        if (output_path != NULL) {
+            int fd = open(
+                output_path,
+                O_WRONLY | O_CREAT | O_TRUNC,
+                0666
+            );
+
+            if (fd == -1) {
+                fprintf(
+                    stderr,
+                    "mini-shell: %s: %s\n",
+                    output_path,
+                    strerror(errno)
+                );
+                _exit(127);
+            }
+
+            if (dup2(fd, STDOUT_FILENO) == -1) {
+                fprintf(stderr, "dup2 failed: %s\n", strerror(errno));
+                close(fd);
+                _exit(127);
+            }
+
+            if (close(fd) == -1) {
+                fprintf(stderr, "close failed: %s\n", strerror(errno));
+                _exit(127);
+            }
+        }
+
         execvp(argv[0], argv);
 
         fprintf(
@@ -70,18 +104,11 @@ static int run_command(char *argv[], pid_t shell_pgid)
         _exit(127);
     }
 
-    /*
-     * Call setpgid() in the parent too.
-     * This avoids depending on whether parent or child runs first.
-     */
     if (setpgid(child_pid, child_pid) == -1) {
         fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
         return -1;
     }
 
-    /*
-     * Give the terminal to the child's process group.
-     */
     if (tcsetpgrp(STDIN_FILENO, child_pid) == -1) {
         fprintf(stderr, "tcsetpgrp child failed: %s\n", strerror(errno));
         return -1;
@@ -104,10 +131,6 @@ static int run_command(char *argv[], pid_t shell_pgid)
         break;
     }
 
-    /*
-     * Whether the command exited, was killed, or stopped,
-     * the shell needs its terminal back.
-     */
     if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
         fprintf(stderr, "tcsetpgrp shell failed: %s\n", strerror(errno));
         return -1;
@@ -129,10 +152,6 @@ static int run_command(char *argv[], pid_t shell_pgid)
             WSTOPSIG(status)
         );
 
-        /*
-         * Temporary cleanup.
-         * Later, jobs/fg/bg will keep stopped jobs instead.
-         */
         if (kill(-child_pid, SIGCONT) == -1) {
             fprintf(stderr, "SIGCONT failed: %s\n", strerror(errno));
             return -1;
@@ -144,7 +163,11 @@ static int run_command(char *argv[], pid_t shell_pgid)
         }
 
         if (waitpid(child_pid, NULL, 0) == -1) {
-            fprintf(stderr, "cleanup waitpid failed: %s\n", strerror(errno));
+            fprintf(
+                stderr,
+                "cleanup waitpid failed: %s\n",
+                strerror(errno)
+            );
             return -1;
         }
     }
@@ -161,10 +184,6 @@ int main(void)
 
     pid_t shell_pgid = getpgrp();
 
-    /*
-     * The shell itself should survive terminal-generated job-control
-     * signals while a child owns the terminal.
-     */
     if (set_signal(SIGINT, SIG_IGN) == -1 ||
         set_signal(SIGTSTP, SIG_IGN) == -1 ||
         set_signal(SIGTTOU, SIG_IGN) == -1) {
@@ -195,13 +214,50 @@ int main(void)
 
         char *argv[MAX_ARGS];
         size_t argc = 0;
+        char *output_path = NULL;
+        int syntax_error = 0;
 
         char *saveptr = NULL;
         char *token = strtok_r(line, " \t\n", &saveptr);
 
-        while (token != NULL && argc < MAX_ARGS - 1) {
-            argv[argc++] = token;
+        while (token != NULL) {
+            if (strcmp(token, ">") == 0) {
+                if (output_path != NULL) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: multiple output redirects\n"
+                    );
+                    syntax_error = 1;
+                    break;
+                }
+
+                token = strtok_r(NULL, " \t\n", &saveptr);
+
+                if (token == NULL || strcmp(token, ">") == 0) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: expected filename after >\n"
+                    );
+                    syntax_error = 1;
+                    break;
+                }
+
+                output_path = token;
+            } else {
+                if (argc >= MAX_ARGS - 1) {
+                    fprintf(stderr, "mini-shell: too many arguments\n");
+                    syntax_error = 1;
+                    break;
+                }
+
+                argv[argc++] = token;
+            }
+
             token = strtok_r(NULL, " \t\n", &saveptr);
+        }
+
+        if (syntax_error) {
+            continue;
         }
 
         argv[argc] = NULL;
@@ -210,42 +266,66 @@ int main(void)
             continue;
         }
 
-if (strcmp(argv[0], "exit") == 0) {
-    break;
-}
+        if (strcmp(argv[0], "exit") == 0) {
+            if (output_path != NULL) {
+                fprintf(
+                    stderr,
+                    "mini-shell: redirection for builtins "
+                    "is not supported yet\n"
+                );
+                continue;
+            }
 
-if (strcmp(argv[0], "cd") == 0) {
-    if (argc > 2) {
-        fprintf(stderr, "mini-shell: cd: too many arguments\n");
-        continue;
-    }
+            break;
+        }
 
-    const char *directory;
+        if (strcmp(argv[0], "cd") == 0) {
+            if (output_path != NULL) {
+                fprintf(
+                    stderr,
+                    "mini-shell: redirection for builtins "
+                    "is not supported yet\n"
+                );
+                continue;
+            }
 
-    if (argc == 1) {
-        directory = getenv("HOME");
+            if (argc > 2) {
+                fprintf(
+                    stderr,
+                    "mini-shell: cd: too many arguments\n"
+                );
+                continue;
+            }
 
-        if (directory == NULL) {
-            fprintf(stderr, "mini-shell: cd: HOME is not set\n");
+            const char *directory;
+
+            if (argc == 1) {
+                directory = getenv("HOME");
+
+                if (directory == NULL) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: cd: HOME is not set\n"
+                    );
+                    continue;
+                }
+            } else {
+                directory = argv[1];
+            }
+
+            if (chdir(directory) == -1) {
+                fprintf(
+                    stderr,
+                    "mini-shell: cd: %s: %s\n",
+                    directory,
+                    strerror(errno)
+                );
+            }
+
             continue;
         }
-    } else {
-        directory = argv[1];
-    }
 
-    if (chdir(directory) == -1) {
-        fprintf(
-            stderr,
-            "mini-shell: cd: %s: %s\n",
-            directory,
-            strerror(errno)
-        );
-    }
-
-    continue;
-}
-
-if (run_command(argv, shell_pgid) == -1) {
+        if (run_command(argv, shell_pgid, output_path) == -1) {
             free(line);
             return EXIT_FAILURE;
         }
