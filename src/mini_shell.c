@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 #define MAX_ARGS 64
-#define MAX_ARGS 64
 #define MAX_COMMANDS 16
 
 static int set_signal(int signal_number, void (*handler)(int))
@@ -115,11 +114,62 @@ static int cleanup_stopped_job(pid_t pgid)
     return 0;
 }
 
+static void reap_background_children(void)
+{
+    for (;;) {
+        int status;
+
+        pid_t pid = waitpid(
+            -1,
+            &status,
+            WNOHANG
+        );
+
+        if (pid == 0) {
+            return;
+        }
+
+        if (pid == -1) {
+            if (errno == ECHILD) {
+                return;
+            }
+
+            if (errno == EINTR) {
+                continue;
+            }
+
+            fprintf(
+                stderr,
+                "background waitpid failed: %s\n",
+                strerror(errno)
+            );
+            return;
+        }
+
+        if (WIFEXITED(status)) {
+            printf(
+                "[shell] background pid=%ld "
+                "exited with status %d\n",
+                (long)pid,
+                WEXITSTATUS(status)
+            );
+        } else if (WIFSIGNALED(status)) {
+            printf(
+                "[shell] background pid=%ld "
+                "terminated by signal %d\n",
+                (long)pid,
+                WTERMSIG(status)
+            );
+        }
+    }
+}
+
 static int run_command(
     char *argv[],
     pid_t shell_pgid,
     const char *input_path,
-    const char *output_path
+    const char *output_path,
+    int background
 )
 {
     pid_t child_pid = fork();
@@ -177,7 +227,15 @@ static int run_command(
         fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
         return -1;
     }
+if (background) {
+    printf(
+        "[shell] background pid=%ld pgid=%ld\n",
+        (long)child_pid,
+        (long)child_pid
+    );
 
+    return 0;
+}
     if (tcsetpgrp(STDIN_FILENO, child_pid) == -1) {
         fprintf(stderr, "tcsetpgrp child failed: %s\n", strerror(errno));
         return -1;
@@ -610,7 +668,9 @@ int main(void)
     size_t capacity = 0;
 
     for (;;) {
-        printf("mini$ ");
+    reap_background_children();
+
+    printf("mini$ ");
         fflush(stdout);
 
         errno = 0;
@@ -660,6 +720,7 @@ int main(void)
         size_t output_command = 0;
 
         int syntax_error = 0;
+        int background = 0;
 
         char *saveptr = NULL;
 
@@ -674,26 +735,48 @@ int main(void)
             size_t current =
                 command_count - 1;
 
-            if (strcmp(token, "|") == 0) {
-                if (argcs[current] == 0) {
+            if (strcmp(token, "&") == 0) {
+                if (background) {
                     fprintf(
                         stderr,
-                        "mini-shell: expected "
-                        "command before |\n"
+                        "mini-shell: multiple & operators\n"
                     );
-
                     syntax_error = 1;
                     break;
                 }
 
-                if (command_count >=
-                    MAX_COMMANDS) {
+                background = 1;
+
+                token = strtok_r(
+                    NULL,
+                    " \t\n",
+                    &saveptr
+                );
+
+                if (token != NULL) {
                     fprintf(
                         stderr,
-                        "mini-shell: too many "
-                        "pipeline commands\n"
+                        "mini-shell: & must appear at the end\n"
                     );
+                    syntax_error = 1;
+                }
 
+                break;
+            } else if (strcmp(token, "|") == 0) {
+                if (argcs[current] == 0) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: expected command before |\n"
+                    );
+                    syntax_error = 1;
+                    break;
+                }
+
+                if (command_count >= MAX_COMMANDS) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: too many pipeline commands\n"
+                    );
                     syntax_error = 1;
                     break;
                 }
@@ -819,6 +902,14 @@ int main(void)
         }
 
         if (command_count > 1) {
+            if (background) {
+    fprintf(
+        stderr,
+        "mini-shell: background pipelines "
+        "are not supported yet\n"
+    );
+    continue;
+}
             if (
                 argcs[command_count - 1] == 0
             ) {
@@ -861,6 +952,15 @@ int main(void)
 
                 continue;
             }
+            if (background &&
+    (strcmp(commands[0][0], "exit") == 0 ||
+     strcmp(commands[0][0], "cd") == 0)) {
+    fprintf(
+        stderr,
+        "mini-shell: builtins cannot run in background yet\n"
+    );
+    continue;
+}
 
             int builtin_in_pipeline = 0;
 
@@ -997,11 +1097,12 @@ int main(void)
          * Single external command.
          */
         if (run_command(
-                commands[0],
-                shell_pgid,
-                input_path,
-                output_path
-            ) == -1) {
+        commands[0],
+        shell_pgid,
+        input_path,
+        output_path,
+        background
+    ) == -1) {
             free(line);
             return EXIT_FAILURE;
         }
