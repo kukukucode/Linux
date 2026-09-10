@@ -280,7 +280,9 @@ static void exec_pipeline_child(
 static int run_pipeline(
     char *left_argv[],
     char *right_argv[],
-    pid_t shell_pgid
+    pid_t shell_pgid,
+    const char *input_path,
+    const char *output_path
 )
 {
     int pipefd[2];
@@ -299,20 +301,34 @@ static int run_pipeline(
         return -1;
     }
 
-    if (left_pid == 0) {
-        /*
-         * The first process becomes the process-group leader.
-         * pgid=0 means use our own PID.
-         */
-        exec_pipeline_child(
-            left_argv,
-            0,
-            STDIN_FILENO,
-            pipefd[1],
-            pipefd[0],
-            pipefd[1]
-        );
+if (left_pid == 0) {
+    /*
+     * For:
+     *
+     *     command < file | command
+     *
+     * redirect the left process's stdin first.
+     */
+    if (input_path != NULL) {
+        if (redirect_fd(
+                input_path,
+                O_RDONLY,
+                0,
+                STDIN_FILENO
+            ) == -1) {
+            _exit(127);
+        }
     }
+
+    exec_pipeline_child(
+        left_argv,
+        0,
+        STDIN_FILENO,
+        pipefd[1],
+        pipefd[0],
+        pipefd[1]
+    );
+}
 
     if (setpgid(left_pid, left_pid) == -1) {
         fprintf(stderr, "left setpgid failed: %s\n", strerror(errno));
@@ -332,19 +348,34 @@ static int run_pipeline(
         return -1;
     }
 
-    if (right_pid == 0) {
-        /*
-         * Join the same process group as the first process.
-         */
-        exec_pipeline_child(
-            right_argv,
-            left_pid,
-            pipefd[0],
-            STDOUT_FILENO,
-            pipefd[0],
-            pipefd[1]
-        );
+if (right_pid == 0) {
+    /*
+     * For:
+     *
+     *     command | command > file
+     *
+     * redirect the right process's stdout.
+     */
+    if (output_path != NULL) {
+        if (redirect_fd(
+                output_path,
+                O_WRONLY | O_CREAT | O_TRUNC,
+                0666,
+                STDOUT_FILENO
+            ) == -1) {
+            _exit(127);
+        }
     }
+
+    exec_pipeline_child(
+        right_argv,
+        left_pid,
+        pipefd[0],
+        STDOUT_FILENO,
+        pipefd[0],
+        pipefd[1]
+    );
+}
 
     if (setpgid(right_pid, left_pid) == -1) {
         fprintf(stderr, "right setpgid failed: %s\n", strerror(errno));
@@ -476,6 +507,9 @@ int main(void)
         int pipe_seen = 0;
         int syntax_error = 0;
 
+        int input_after_pipe = 0;
+        int output_before_pipe = 0;
+
         char *saveptr = NULL;
         char *token = strtok_r(line, " \t\n", &saveptr);
 
@@ -525,6 +559,7 @@ int main(void)
                 }
 
                 input_path = token;
+                input_after_pipe = pipe_seen;
             } else if (strcmp(token, ">") == 0) {
                 if (output_path != NULL) {
                     fprintf(
@@ -583,22 +618,24 @@ int main(void)
         }
 
         if (pipe_seen) {
-            if (right_argc == 0) {
-                fprintf(
-                    stderr,
-                    "mini-shell: expected command after |\n"
-                );
-                continue;
-            }
+            if (input_after_pipe) {
+    fprintf(
+        stderr,
+        "mini-shell: input redirection after | "
+        "is not supported yet\n"
+    );
+    continue;
+}
 
-            if (input_path != NULL || output_path != NULL) {
-                fprintf(
-                    stderr,
-                    "mini-shell: redirection with pipelines "
-                    "is not supported yet\n"
-                );
-                continue;
-            }
+if (output_before_pipe) {
+    fprintf(
+        stderr,
+        "mini-shell: output redirection before | "
+        "is not supported yet\n"
+    );
+    continue;
+}
+
 
             if (strcmp(left_argv[0], "cd") == 0 ||
                 strcmp(left_argv[0], "exit") == 0 ||
@@ -613,10 +650,12 @@ int main(void)
             }
 
             if (run_pipeline(
-                    left_argv,
-                    right_argv,
-                    shell_pgid
-                ) == -1) {
+            left_argv,
+            right_argv,
+            shell_pgid,
+            input_path,
+            output_path
+        ) == -1) {
                 free(line);
                 return EXIT_FAILURE;
             }
