@@ -9,6 +9,8 @@
 #include <unistd.h>
 
 #define MAX_ARGS 64
+#define MAX_ARGS 64
+#define MAX_COMMANDS 16
 
 static int set_signal(int signal_number, void (*handler)(int))
 {
@@ -225,13 +227,25 @@ static int run_command(
     return 0;
 }
 
+static void close_all_pipes(
+    int pipes[][2],
+    size_t pipe_count
+)
+{
+    for (size_t i = 0; i < pipe_count; ++i) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+}
+
 static void exec_pipeline_child(
     char *argv[],
     pid_t pgid,
-    int input_fd,
-    int output_fd,
-    int pipe_read_fd,
-    int pipe_write_fd
+    size_t index,
+    size_t command_count,
+    int pipes[][2],
+    const char *input_path,
+    const char *output_path
 )
 {
     if (setpgid(0, pgid) == -1) {
@@ -243,27 +257,88 @@ static void exec_pipeline_child(
         _exit(127);
     }
 
-    if (input_fd != STDIN_FILENO) {
-        if (dup2(input_fd, STDIN_FILENO) == -1) {
-            fprintf(stderr, "dup2 stdin failed: %s\n", strerror(errno));
+    /*
+     * stdin
+     */
+    if (index == 0) {
+        /*
+         * First command:
+         *
+         *     file < cmd0 | cmd1 | ...
+         */
+        if (input_path != NULL) {
+            if (redirect_fd(
+                    input_path,
+                    O_RDONLY,
+                    0,
+                    STDIN_FILENO
+                ) == -1) {
+                _exit(127);
+            }
+        }
+    } else {
+        /*
+         * All commands except the first read from
+         * the previous pipe.
+         */
+        if (dup2(
+                pipes[index - 1][0],
+                STDIN_FILENO
+            ) == -1) {
+            fprintf(
+                stderr,
+                "dup2 stdin failed: %s\n",
+                strerror(errno)
+            );
             _exit(127);
         }
     }
 
-    if (output_fd != STDOUT_FILENO) {
-        if (dup2(output_fd, STDOUT_FILENO) == -1) {
-            fprintf(stderr, "dup2 stdout failed: %s\n", strerror(errno));
+    /*
+     * stdout
+     */
+    if (index + 1 == command_count) {
+        /*
+         * Last command:
+         *
+         *     ... | cmdN > file
+         */
+        if (output_path != NULL) {
+            if (redirect_fd(
+                    output_path,
+                    O_WRONLY | O_CREAT | O_TRUNC,
+                    0666,
+                    STDOUT_FILENO
+                ) == -1) {
+                _exit(127);
+            }
+        }
+    } else {
+        /*
+         * All commands except the last write to
+         * the next pipe.
+         */
+        if (dup2(
+                pipes[index][1],
+                STDOUT_FILENO
+            ) == -1) {
+            fprintf(
+                stderr,
+                "dup2 stdout failed: %s\n",
+                strerror(errno)
+            );
             _exit(127);
         }
     }
 
-    if (pipe_read_fd != STDIN_FILENO) {
-        close(pipe_read_fd);
-    }
-
-    if (pipe_write_fd != STDOUT_FILENO) {
-        close(pipe_write_fd);
-    }
+    /*
+     * After dup2(), the child no longer needs any
+     * original pipe descriptors.
+     */
+    close_all_pipes(
+        pipes,
+        command_count - 1
+    );
 
     execvp(argv[0], argv);
 
@@ -278,134 +353,155 @@ static void exec_pipeline_child(
 }
 
 static int run_pipeline(
-    char *left_argv[],
-    char *right_argv[],
+    char *commands[][MAX_ARGS],
+    size_t command_count,
     pid_t shell_pgid,
     const char *input_path,
     const char *output_path
 )
 {
-    int pipefd[2];
+    int pipes[MAX_COMMANDS - 1][2];
+    size_t pipe_count = command_count - 1;
 
-    if (pipe(pipefd) == -1) {
-        fprintf(stderr, "pipe failed: %s\n", strerror(errno));
-        return -1;
-    }
-
-    pid_t left_pid = fork();
-
-    if (left_pid == -1) {
-        fprintf(stderr, "fork failed: %s\n", strerror(errno));
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return -1;
-    }
-
-if (left_pid == 0) {
     /*
-     * For:
-     *
-     *     command < file | command
-     *
-     * redirect the left process's stdin first.
+     * N commands need N - 1 pipes.
      */
-    if (input_path != NULL) {
-        if (redirect_fd(
+    for (size_t i = 0; i < pipe_count; ++i) {
+        if (pipe(pipes[i]) == -1) {
+            fprintf(
+                stderr,
+                "pipe failed: %s\n",
+                strerror(errno)
+            );
+
+            close_all_pipes(pipes, i);
+            return -1;
+        }
+    }
+
+    pid_t pipeline_pgid = 0;
+
+    /*
+     * Create one process for every command.
+     */
+    for (size_t i = 0; i < command_count; ++i) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            fprintf(
+                stderr,
+                "fork failed: %s\n",
+                strerror(errno)
+            );
+
+            close_all_pipes(pipes, pipe_count);
+
+            if (pipeline_pgid != 0) {
+                kill(-pipeline_pgid, SIGTERM);
+
+                while (
+                    waitpid(
+                        -pipeline_pgid,
+                        NULL,
+                        0
+                    ) != -1
+                ) {
+                }
+            }
+
+            return -1;
+        }
+
+        if (pid == 0) {
+            /*
+             * First child creates the PGID.
+             * Later children join it.
+             */
+            pid_t child_pgid =
+                pipeline_pgid == 0
+                    ? 0
+                    : pipeline_pgid;
+
+            exec_pipeline_child(
+                commands[i],
+                child_pgid,
+                i,
+                command_count,
+                pipes,
                 input_path,
-                O_RDONLY,
-                0,
-                STDIN_FILENO
-            ) == -1) {
-            _exit(127);
+                output_path
+            );
+        }
+
+        /*
+         * PID of the first process becomes
+         * the PGID of the whole pipeline.
+         */
+        if (pipeline_pgid == 0) {
+            pipeline_pgid = pid;
+        }
+
+        /*
+         * Parent also calls setpgid()
+         * to avoid relying on scheduling order.
+         */
+        if (setpgid(pid, pipeline_pgid) == -1 &&
+            errno != EACCES) {
+            fprintf(
+                stderr,
+                "parent setpgid failed: %s\n",
+                strerror(errno)
+            );
+
+            close_all_pipes(pipes, pipe_count);
+
+            kill(-pipeline_pgid, SIGTERM);
+
+            while (
+                waitpid(
+                    -pipeline_pgid,
+                    NULL,
+                    0
+                ) != -1
+            ) {
+            }
+
+            return -1;
         }
     }
 
-    exec_pipeline_child(
-        left_argv,
-        0,
-        STDIN_FILENO,
-        pipefd[1],
-        pipefd[0],
-        pipefd[1]
-    );
-}
-
-    if (setpgid(left_pid, left_pid) == -1) {
-        fprintf(stderr, "left setpgid failed: %s\n", strerror(errno));
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return -1;
-    }
-
-    pid_t right_pid = fork();
-
-    if (right_pid == -1) {
-        fprintf(stderr, "fork failed: %s\n", strerror(errno));
-        close(pipefd[0]);
-        close(pipefd[1]);
-        kill(-left_pid, SIGTERM);
-        waitpid(left_pid, NULL, 0);
-        return -1;
-    }
-
-if (right_pid == 0) {
     /*
-     * For:
-     *
-     *     command | command > file
-     *
-     * redirect the right process's stdout.
+     * The shell must not keep pipe ends open.
      */
-    if (output_path != NULL) {
-        if (redirect_fd(
-                output_path,
-                O_WRONLY | O_CREAT | O_TRUNC,
-                0666,
-                STDOUT_FILENO
-            ) == -1) {
-            _exit(127);
-        }
-    }
-
-    exec_pipeline_child(
-        right_argv,
-        left_pid,
-        pipefd[0],
-        STDOUT_FILENO,
-        pipefd[0],
-        pipefd[1]
-    );
-}
-
-    if (setpgid(right_pid, left_pid) == -1) {
-        fprintf(stderr, "right setpgid failed: %s\n", strerror(errno));
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return -1;
-    }
+    close_all_pipes(pipes, pipe_count);
 
     /*
-     * The shell itself must not keep either pipe end open.
+     * Give the terminal to the whole pipeline.
      */
-    close(pipefd[0]);
-    close(pipefd[1]);
-
-    /*
-     * The whole pipeline is one foreground job.
-     */
-    if (tcsetpgrp(STDIN_FILENO, left_pid) == -1) {
-        fprintf(stderr, "tcsetpgrp pipeline failed: %s\n", strerror(errno));
+    if (tcsetpgrp(
+            STDIN_FILENO,
+            pipeline_pgid
+        ) == -1) {
+        fprintf(
+            stderr,
+            "tcsetpgrp pipeline failed: %s\n",
+            strerror(errno)
+        );
         return -1;
     }
 
-    int remaining = 2;
+    size_t remaining = command_count;
     int stopped = 0;
 
+    /*
+     * Negative PID means:
+     * wait for any child in this process group.
+     */
     while (remaining > 0) {
         int status;
 
         pid_t result = waitpid(
-            -left_pid,
+            -pipeline_pgid,
             &status,
             WUNTRACED
         );
@@ -415,40 +511,69 @@ if (right_pid == 0) {
                 continue;
             }
 
-            fprintf(stderr, "pipeline waitpid failed: %s\n", strerror(errno));
+            fprintf(
+                stderr,
+                "pipeline waitpid failed: %s\n",
+                strerror(errno)
+            );
             break;
         }
 
         if (WIFSTOPPED(status)) {
             printf(
-                "[shell] pipeline process %ld stopped by signal %d\n",
+                "[shell] pipeline process %ld "
+                "stopped by signal %d\n",
                 (long)result,
                 WSTOPSIG(status)
             );
+
             stopped = 1;
             break;
         }
 
-        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        if (WIFEXITED(status) ||
+            WIFSIGNALED(status)) {
             --remaining;
         }
     }
 
-    if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
-        fprintf(stderr, "tcsetpgrp shell failed: %s\n", strerror(errno));
+    /*
+     * Shell takes the terminal back.
+     */
+    if (tcsetpgrp(
+            STDIN_FILENO,
+            shell_pgid
+        ) == -1) {
+        fprintf(
+            stderr,
+            "tcsetpgrp shell failed: %s\n",
+            strerror(errno)
+        );
         return -1;
     }
 
     if (stopped) {
-        if (cleanup_stopped_job(left_pid) == -1) {
+        if (cleanup_stopped_job(
+                pipeline_pgid
+            ) == -1) {
             return -1;
         }
 
-        while (waitpid(-left_pid, NULL, 0) != -1) {
+        while (
+            waitpid(
+                -pipeline_pgid,
+                NULL,
+                0
+            ) != -1
+        ) {
         }
 
         if (errno != ECHILD) {
-            fprintf(stderr, "cleanup waitpid failed: %s\n", strerror(errno));
+            fprintf(
+                stderr,
+                "cleanup waitpid failed: %s\n",
+                strerror(errno)
+            );
             return -1;
         }
     }
@@ -461,7 +586,10 @@ if (right_pid == 0) {
 int main(void)
 {
     if (!isatty(STDIN_FILENO)) {
-        fprintf(stderr, "mini-shell: stdin is not a terminal\n");
+        fprintf(
+            stderr,
+            "mini-shell: stdin is not a terminal\n"
+        );
         return EXIT_FAILURE;
     }
 
@@ -470,7 +598,11 @@ int main(void)
     if (set_signal(SIGINT, SIG_IGN) == -1 ||
         set_signal(SIGTSTP, SIG_IGN) == -1 ||
         set_signal(SIGTTOU, SIG_IGN) == -1) {
-        fprintf(stderr, "sigaction failed: %s\n", strerror(errno));
+        fprintf(
+            stderr,
+            "sigaction failed: %s\n",
+            strerror(errno)
+        );
         return EXIT_FAILURE;
     }
 
@@ -482,7 +614,9 @@ int main(void)
         fflush(stdout);
 
         errno = 0;
-        ssize_t length = getline(&line, &capacity, stdin);
+
+        ssize_t length =
+            getline(&line, &capacity, stdin);
 
         if (length == -1) {
             if (feof(stdin)) {
@@ -490,61 +624,101 @@ int main(void)
                 break;
             }
 
-            fprintf(stderr, "getline failed: %s\n", strerror(errno));
+            fprintf(
+                stderr,
+                "getline failed: %s\n",
+                strerror(errno)
+            );
+
             free(line);
             return EXIT_FAILURE;
         }
 
-        char *left_argv[MAX_ARGS];
-        char *right_argv[MAX_ARGS];
-
-        size_t left_argc = 0;
-        size_t right_argc = 0;
+        /*
+         * commands[command][argument]
+         *
+         * Example:
+         *
+         * echo hello | tr a-z A-Z | wc -c
+         *
+         * commands[0] = {"echo", "hello", NULL}
+         * commands[1] = {"tr", "a-z", "A-Z", NULL}
+         * commands[2] = {"wc", "-c", NULL}
+         */
+        char *commands[MAX_COMMANDS][MAX_ARGS];
+        size_t argcs[MAX_COMMANDS] = {0};
+        size_t command_count = 1;
 
         char *input_path = NULL;
         char *output_path = NULL;
 
-        int pipe_seen = 0;
+        /*
+         * Remember which command contained
+         * each redirection.
+         */
+        size_t input_command = 0;
+        size_t output_command = 0;
+
         int syntax_error = 0;
 
-        int input_after_pipe = 0;
-        int output_before_pipe = 0;
-
         char *saveptr = NULL;
-        char *token = strtok_r(line, " \t\n", &saveptr);
+
+        char *token =
+            strtok_r(
+                line,
+                " \t\n",
+                &saveptr
+            );
 
         while (token != NULL) {
+            size_t current =
+                command_count - 1;
+
             if (strcmp(token, "|") == 0) {
-                if (pipe_seen) {
+                if (argcs[current] == 0) {
                     fprintf(
                         stderr,
-                        "mini-shell: only one pipe is supported for now\n"
+                        "mini-shell: expected "
+                        "command before |\n"
                     );
+
                     syntax_error = 1;
                     break;
                 }
 
-                if (left_argc == 0) {
+                if (command_count >=
+                    MAX_COMMANDS) {
                     fprintf(
                         stderr,
-                        "mini-shell: expected command before |\n"
+                        "mini-shell: too many "
+                        "pipeline commands\n"
                     );
+
                     syntax_error = 1;
                     break;
                 }
 
-                pipe_seen = 1;
-            } else if (strcmp(token, "<") == 0) {
+                ++command_count;
+            } else if (
+                strcmp(token, "<") == 0
+            ) {
                 if (input_path != NULL) {
                     fprintf(
                         stderr,
-                        "mini-shell: multiple input redirects\n"
+                        "mini-shell: multiple "
+                        "input redirects\n"
                     );
+
                     syntax_error = 1;
                     break;
                 }
 
-                token = strtok_r(NULL, " \t\n", &saveptr);
+                token =
+                    strtok_r(
+                        NULL,
+                        " \t\n",
+                        &saveptr
+                    );
 
                 if (token == NULL ||
                     strcmp(token, "<") == 0 ||
@@ -552,25 +726,36 @@ int main(void)
                     strcmp(token, "|") == 0) {
                     fprintf(
                         stderr,
-                        "mini-shell: expected filename after <\n"
+                        "mini-shell: expected "
+                        "filename after <\n"
                     );
+
                     syntax_error = 1;
                     break;
                 }
 
                 input_path = token;
-                input_after_pipe = pipe_seen;
-            } else if (strcmp(token, ">") == 0) {
+                input_command = current;
+            } else if (
+                strcmp(token, ">") == 0
+            ) {
                 if (output_path != NULL) {
                     fprintf(
                         stderr,
-                        "mini-shell: multiple output redirects\n"
+                        "mini-shell: multiple "
+                        "output redirects\n"
                     );
+
                     syntax_error = 1;
                     break;
                 }
 
-                token = strtok_r(NULL, " \t\n", &saveptr);
+                token =
+                    strtok_r(
+                        NULL,
+                        " \t\n",
+                        &saveptr
+                    );
 
                 if (token == NULL ||
                     strcmp(token, "<") == 0 ||
@@ -578,84 +763,145 @@ int main(void)
                     strcmp(token, "|") == 0) {
                     fprintf(
                         stderr,
-                        "mini-shell: expected filename after >\n"
+                        "mini-shell: expected "
+                        "filename after >\n"
                     );
+
                     syntax_error = 1;
                     break;
                 }
 
                 output_path = token;
-            } else if (!pipe_seen) {
-                if (left_argc >= MAX_ARGS - 1) {
-                    fprintf(stderr, "mini-shell: too many arguments\n");
-                    syntax_error = 1;
-                    break;
-                }
-
-                left_argv[left_argc++] = token;
+                output_command = current;
             } else {
-                if (right_argc >= MAX_ARGS - 1) {
-                    fprintf(stderr, "mini-shell: too many arguments\n");
+                if (argcs[current] >=
+                    MAX_ARGS - 1) {
+                    fprintf(
+                        stderr,
+                        "mini-shell: too many "
+                        "arguments\n"
+                    );
+
                     syntax_error = 1;
                     break;
                 }
 
-                right_argv[right_argc++] = token;
+                commands[current]
+                        [argcs[current]++] =
+                    token;
             }
 
-            token = strtok_r(NULL, " \t\n", &saveptr);
+            token =
+                strtok_r(
+                    NULL,
+                    " \t\n",
+                    &saveptr
+                );
         }
 
         if (syntax_error) {
             continue;
         }
 
-        left_argv[left_argc] = NULL;
-        right_argv[right_argc] = NULL;
+        /*
+         * execvp() requires NULL-terminated argv.
+         */
+        for (
+            size_t i = 0;
+            i < command_count;
+            ++i
+        ) {
+            commands[i][argcs[i]] = NULL;
+        }
 
-        if (left_argc == 0) {
+        if (argcs[0] == 0) {
             continue;
         }
 
-        if (pipe_seen) {
-            if (input_after_pipe) {
-    fprintf(
-        stderr,
-        "mini-shell: input redirection after | "
-        "is not supported yet\n"
-    );
-    continue;
-}
-
-if (output_before_pipe) {
-    fprintf(
-        stderr,
-        "mini-shell: output redirection before | "
-        "is not supported yet\n"
-    );
-    continue;
-}
-
-
-            if (strcmp(left_argv[0], "cd") == 0 ||
-                strcmp(left_argv[0], "exit") == 0 ||
-                strcmp(right_argv[0], "cd") == 0 ||
-                strcmp(right_argv[0], "exit") == 0) {
+        if (command_count > 1) {
+            if (
+                argcs[command_count - 1] == 0
+            ) {
                 fprintf(
                     stderr,
-                    "mini-shell: builtins in pipelines "
-                    "are not supported yet\n"
+                    "mini-shell: expected "
+                    "command after |\n"
                 );
+
+                continue;
+            }
+
+            /*
+             * For now:
+             *
+             * input redirect  → first command only
+             * output redirect → last command only
+             */
+            if (input_path != NULL &&
+                input_command != 0) {
+                fprintf(
+                    stderr,
+                    "mini-shell: input redirection "
+                    "is only supported on the first "
+                    "pipeline command\n"
+                );
+
+                continue;
+            }
+
+            if (output_path != NULL &&
+                output_command !=
+                    command_count - 1) {
+                fprintf(
+                    stderr,
+                    "mini-shell: output redirection "
+                    "is only supported on the last "
+                    "pipeline command\n"
+                );
+
+                continue;
+            }
+
+            int builtin_in_pipeline = 0;
+
+            for (
+                size_t i = 0;
+                i < command_count;
+                ++i
+            ) {
+                if (
+                    strcmp(
+                        commands[i][0],
+                        "cd"
+                    ) == 0 ||
+                    strcmp(
+                        commands[i][0],
+                        "exit"
+                    ) == 0
+                ) {
+                    builtin_in_pipeline = 1;
+                    break;
+                }
+            }
+
+            if (builtin_in_pipeline) {
+                fprintf(
+                    stderr,
+                    "mini-shell: builtins in "
+                    "pipelines are not "
+                    "supported yet\n"
+                );
+
                 continue;
             }
 
             if (run_pipeline(
-            left_argv,
-            right_argv,
-            shell_pgid,
-            input_path,
-            output_path
-        ) == -1) {
+                    commands,
+                    command_count,
+                    shell_pgid,
+                    input_path,
+                    output_path
+                ) == -1) {
                 free(line);
                 return EXIT_FAILURE;
             }
@@ -663,51 +909,76 @@ if (output_before_pipe) {
             continue;
         }
 
-        if (strcmp(left_argv[0], "exit") == 0) {
-            if (input_path != NULL || output_path != NULL) {
+        /*
+         * exit builtin
+         */
+        if (
+            strcmp(
+                commands[0][0],
+                "exit"
+            ) == 0
+        ) {
+            if (input_path != NULL ||
+                output_path != NULL) {
                 fprintf(
                     stderr,
-                    "mini-shell: redirection for builtins "
-                    "is not supported yet\n"
+                    "mini-shell: redirection for "
+                    "builtins is not supported yet\n"
                 );
+
                 continue;
             }
 
             break;
         }
 
-        if (strcmp(left_argv[0], "cd") == 0) {
-            if (input_path != NULL || output_path != NULL) {
+        /*
+         * cd builtin
+         */
+        if (
+            strcmp(
+                commands[0][0],
+                "cd"
+            ) == 0
+        ) {
+            if (input_path != NULL ||
+                output_path != NULL) {
                 fprintf(
                     stderr,
-                    "mini-shell: redirection for builtins "
-                    "is not supported yet\n"
+                    "mini-shell: redirection for "
+                    "builtins is not supported yet\n"
                 );
+
                 continue;
             }
 
-            if (left_argc > 2) {
+            if (argcs[0] > 2) {
                 fprintf(
                     stderr,
-                    "mini-shell: cd: too many arguments\n"
+                    "mini-shell: cd: "
+                    "too many arguments\n"
                 );
+
                 continue;
             }
 
             const char *directory;
 
-            if (left_argc == 1) {
+            if (argcs[0] == 1) {
                 directory = getenv("HOME");
 
                 if (directory == NULL) {
                     fprintf(
                         stderr,
-                        "mini-shell: cd: HOME is not set\n"
+                        "mini-shell: cd: "
+                        "HOME is not set\n"
                     );
+
                     continue;
                 }
             } else {
-                directory = left_argv[1];
+                directory =
+                    commands[0][1];
             }
 
             if (chdir(directory) == -1) {
@@ -722,8 +993,11 @@ if (output_before_pipe) {
             continue;
         }
 
+        /*
+         * Single external command.
+         */
         if (run_command(
-                left_argv,
+                commands[0],
                 shell_pgid,
                 input_path,
                 output_path
@@ -736,3 +1010,4 @@ if (output_before_pipe) {
     free(line);
     return EXIT_SUCCESS;
 }
+
