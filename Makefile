@@ -2,16 +2,15 @@ CC ?= cc
 CPPFLAGS ?= -D_POSIX_C_SOURCE=200809L
 CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Werror -g3 -O0
 
-BUILD_DIR ?= build
+BUILD_DIR := build
 
-HELLO_TARGET := $(BUILD_DIR)/hello
-MEMORY_TARGET := $(BUILD_DIR)/memory_layout
-OWNERSHIP_TARGET := $(BUILD_DIR)/ownership
+# Intentionally broken programs are excluded from normal CI.
+EXCLUDED_SOURCES := \
+	src/ownership_uaf.c \
+	src/ownership_double_free.c
 
-TARGETS := \
-	$(HELLO_TARGET) \
-	$(MEMORY_TARGET) \
-	$(OWNERSHIP_TARGET)
+SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/*.c))
+TARGETS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(SOURCES))
 
 .PHONY: all clean test
 
@@ -20,18 +19,33 @@ all: $(TARGETS)
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(HELLO_TARGET): src/hello.c | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
-
-$(MEMORY_TARGET): src/memory_layout.c | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
-
-$(OWNERSHIP_TARGET): src/ownership.c | $(BUILD_DIR)
+$(BUILD_DIR)/%: src/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 test: all
-	@output=`$(HELLO_TARGET)`; test "$$output" = "Linux systems project is ready."
-	@$(OWNERSHIP_TARGET) >/dev/null
+	@output=`$(BUILD_DIR)/hello`; \
+		test "$$output" = "Linux systems project is ready."
+
+	@$(BUILD_DIR)/ownership >/dev/null
+
+	@output=`$(BUILD_DIR)/exec_basic`; \
+		printf '%s\n' "$$output" | grep -q "hello from exec"
+
+	@output=`$(BUILD_DIR)/pipe_basic`; \
+		printf '%s\n' "$$output" | grep -q "hello through pipe"
+
+	@output=`$(BUILD_DIR)/pipe_fork`; \
+		printf '%s\n' "$$output" | grep -q "message from child"
+
+	@output=`$(BUILD_DIR)/dup2_basic 2>&1`; \
+		printf '%s\n' "$$output" | grep -q "hello through redirected stdout"
+
+	@output=`$(BUILD_DIR)/pipe_exec`; \
+		printf '%s\n' "$$output" | grep -q "hello from child through pipe"
+
+	@output=`$(BUILD_DIR)/pipeline_two`; \
+		printf '%s\n' "$$output" | grep -q '^6$$'
+
 	@echo "All checks passed."
 
 clean:
