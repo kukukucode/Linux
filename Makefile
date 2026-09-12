@@ -20,6 +20,10 @@ MEMORY_SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/memory/*.c))
 MEMORY_TARGETS := $(patsubst src/memory/%.c,$(BUILD_DIR)/%,$(MEMORY_SOURCES))
 TARGETS += $(MEMORY_TARGETS)
 
+IO_SOURCES := $(wildcard src/io/*.c)
+IO_TARGETS := $(patsubst src/io/%.c,$(BUILD_DIR)/%,$(IO_SOURCES))
+TARGETS += $(IO_TARGETS)
+
 MINI_SHELL_SOURCES := \
 	src/mini_shell/main.c \
 	src/mini_shell/jobs.c \
@@ -42,6 +46,9 @@ $(PROCESS_TARGETS): $(BUILD_DIR)/%: src/process/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(MEMORY_TARGETS): $(BUILD_DIR)/%: src/memory/%.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(IO_TARGETS): $(BUILD_DIR)/%: src/io/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/mini_shell: $(MINI_SHELL_SOURCES) $(MINI_SHELL_HEADERS) | $(BUILD_DIR)
