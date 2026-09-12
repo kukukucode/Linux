@@ -490,37 +490,55 @@ int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
     }
 
     size_t remaining = command_count;
-    int stopped = 0;
+    size_t stopped_count = 0;
+    int wait_failed = 0;
 
     /*
-     * Negative PID means:
-     * wait for any child in this process group.
+     * Wait for every process in the foreground pipeline.
+     *
+     * If Ctrl-Z stops the process group, keep collecting stop
+     * notifications until every still-live process has stopped.
      */
     while (remaining > 0) {
         int status;
+        pid_t result;
 
-        pid_t result = waitpid(-pipeline_pgid, &status, WUNTRACED);
+        for (;;) {
+            result = waitpid(-pipeline_pgid, &status, WUNTRACED);
 
-        if (result == -1) {
-            if (errno == EINTR) {
+            if (result == -1 && errno == EINTR) {
                 continue;
             }
 
-            fprintf(stderr, "pipeline waitpid failed: %s\n", strerror(errno));
             break;
         }
 
-        if (WIFSTOPPED(status)) {
-            printf("[shell] pipeline process %ld "
-                   "stopped by signal %d\n",
-                   (long)result, WSTOPSIG(status));
-
-            stopped = 1;
+        if (result == -1) {
+            fprintf(stderr, "pipeline waitpid failed: %s\n", strerror(errno));
+            wait_failed = 1;
             break;
         }
 
         if (WIFEXITED(status) || WIFSIGNALED(status)) {
             --remaining;
+
+            if (remaining == 0) {
+                break;
+            }
+
+            if (stopped_count >= remaining) {
+                break;
+            }
+
+            continue;
+        }
+
+        if (WIFSTOPPED(status)) {
+            ++stopped_count;
+
+            if (stopped_count >= remaining) {
+                break;
+            }
         }
     }
 
@@ -532,18 +550,54 @@ int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
         return -1;
     }
 
-    if (stopped) {
-        if (cleanup_stopped_job(pipeline_pgid) == -1) {
+    if (wait_failed) {
+        return -1;
+    }
+
+    /*
+     * Every still-live pipeline process is stopped.
+     * Preserve the process group as a shell job.
+     */
+    if (remaining > 0 && stopped_count >= remaining) {
+        char command[MAX_JOB_COMMAND];
+
+        format_pipeline_command(command, sizeof(command), commands,
+                                command_count);
+
+        int job_id =
+            add_job_text(jobs, next_job_id, pipeline_pgid, remaining, command);
+
+        if (job_id == -1) {
+            fprintf(stderr, "mini-shell: job table is full\n");
+
+            if (cleanup_stopped_job(pipeline_pgid) == -1) {
+                return -1;
+            }
+
+            while (waitpid(-pipeline_pgid, NULL, 0) != -1) {
+            }
+
+            if (errno != ECHILD) {
+                fprintf(stderr, "cleanup waitpid failed: %s\n",
+                        strerror(errno));
+                return -1;
+            }
+
             return -1;
         }
 
-        while (waitpid(-pipeline_pgid, NULL, 0) != -1) {
-        }
+        struct Job *job = find_job_by_id(jobs, job_id);
 
-        if (errno != ECHILD) {
-            fprintf(stderr, "cleanup waitpid failed: %s\n", strerror(errno));
+        if (job == NULL) {
+            fprintf(stderr, "mini-shell: internal job lookup failed\n");
             return -1;
         }
+
+        job->state = JOB_STOPPED;
+
+        printf("[%d] Stopped    %s\n", job->id, job->command);
+
+        return 0;
     }
 
     printf("[shell] pipeline finished\n");

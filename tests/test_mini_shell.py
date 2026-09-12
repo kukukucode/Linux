@@ -232,6 +232,70 @@ def main():
                 "output:\n{}".format(output)
             )
 
+        # Foreground pipeline job control:
+        # Ctrl-Z -> jobs -> bg -> fg -> Ctrl-C
+        send(fd, "sleep 30 | cat")
+
+        time.sleep(0.2)
+
+        os.write(fd, CTRL_Z)
+
+        output = read_until(fd, PROMPT)
+
+        match = re.search(
+            r"\[(\d+)\]\s+Stopped\s+sleep 30 \| cat",
+            output,
+        )
+
+        if match is None:
+            raise RuntimeError(
+                "foreground pipeline was not saved as a stopped job\n"
+                "output:\n{}".format(output)
+            )
+
+        stopped_pipeline_job_id = match.group(1)
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Stopped  sleep 30 | cat",
+            "jobs shows stopped foreground pipeline",
+        )
+
+        send(fd, "bg {}".format(stopped_pipeline_job_id))
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Running    sleep 30 | cat",
+            "bg resumes stopped pipeline",
+        )
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Running  sleep 30 | cat",
+            "jobs shows resumed pipeline",
+        )
+
+        send(fd, "fg {}".format(stopped_pipeline_job_id))
+
+        time.sleep(0.2)
+
+        os.write(fd, CTRL_C)
+
+        read_until(fd, PROMPT)
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+
+        if "sleep 30 | cat" in output:
+            raise RuntimeError(
+                "terminated foreground pipeline remained in jobs\n"
+                "output:\n{}".format(output)
+            )
+
         send(fd, "exit")
 
         _, status = os.waitpid(pid, 0)
