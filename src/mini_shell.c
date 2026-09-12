@@ -130,6 +130,41 @@ static int foreground_job(
     return 0;
 }
 
+static int background_job(
+    struct Job *job
+)
+{
+    if (job->state != JOB_STOPPED) {
+        fprintf(
+            stderr,
+            "mini-shell: bg: job is not stopped\n"
+        );
+        return -1;
+    }
+
+    /*
+     * Send SIGCONT to the whole process group.
+     */
+    if (kill(-job->pgid, SIGCONT) == -1) {
+        fprintf(
+            stderr,
+            "mini-shell: bg: SIGCONT failed: %s\n",
+            strerror(errno)
+        );
+        return -1;
+    }
+
+    job->state = JOB_RUNNING;
+
+    printf(
+        "[%d] Running    %s\n",
+        job->id,
+        job->command
+    );
+
+    return 0;
+}
+
 static int is_builtin(
     const char *name
 )
@@ -138,7 +173,8 @@ static int is_builtin(
         strcmp(name, "exit") == 0 ||
         strcmp(name, "cd") == 0 ||
         strcmp(name, "jobs") == 0 ||
-        strcmp(name, "fg") == 0;
+        strcmp(name, "fg") == 0 ||
+        strcmp(name, "bg") == 0;
 }
 
 static void print_jobs(
@@ -1331,6 +1367,76 @@ if (
 }
 
 /*
+         * bg builtin
+         */
+        if (
+            strcmp(
+                commands[0][0],
+                "bg"
+            ) == 0
+        ) {
+            if (input_path != NULL ||
+                output_path != NULL) {
+                fprintf(
+                    stderr,
+                    "mini-shell: redirection for "
+                    "builtins is not supported yet\n"
+                );
+                continue;
+            }
+
+            if (argcs[0] != 2) {
+                fprintf(
+                    stderr,
+                    "mini-shell: usage: bg JOB_ID\n"
+                );
+                continue;
+            }
+
+            char *end = NULL;
+            errno = 0;
+
+            long job_id = strtol(
+                commands[0][1],
+                &end,
+                10
+            );
+
+            if (errno != 0 ||
+                end == commands[0][1] ||
+                *end != '\0' ||
+                job_id <= 0) {
+                fprintf(
+                    stderr,
+                    "mini-shell: bg: invalid job id: %s\n",
+                    commands[0][1]
+                );
+                continue;
+            }
+
+            struct Job *job =
+                find_job_by_id(
+                    jobs,
+                    (int)job_id
+                );
+
+            if (job == NULL) {
+                fprintf(
+                    stderr,
+                    "mini-shell: bg: no such job: %ld\n",
+                    job_id
+                );
+                continue;
+            }
+
+            if (background_job(job) == -1) {
+                continue;
+            }
+
+            continue;
+        }
+
+        /*
  * fg builtin
  */
 if (
