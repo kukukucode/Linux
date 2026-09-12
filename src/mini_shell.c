@@ -23,6 +23,7 @@ struct Job {
     int id;
     pid_t pgid;
     enum JobState state;
+    size_t remaining;
     char command[MAX_JOB_COMMAND];
 };
 
@@ -234,6 +235,7 @@ static int add_job(
     struct Job jobs[],
     int *next_job_id,
     pid_t pgid,
+    size_t process_count,
     char *argv[]
 )
 {
@@ -246,6 +248,7 @@ static int add_job(
         jobs[i].id = *next_job_id;
         jobs[i].pgid = pgid;
         jobs[i].state = JOB_RUNNING;
+        jobs[i].remaining = process_count;
 
         ++(*next_job_id);
 
@@ -388,62 +391,78 @@ static void reap_background_children(
     struct Job jobs[]
 )
 {
-    for (;;) {
-        int status;
-
-        pid_t pid = waitpid(
-            -1,
-            &status,
-            WNOHANG
-        );
-
-        if (pid == 0) {
-            return;
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+        if (!jobs[i].used) {
+            continue;
         }
 
-        if (pid == -1) {
-            if (errno == ECHILD) {
-                return;
+        /*
+         * A stopped job has no exiting children to reap
+         * until it is continued.
+         */
+        if (jobs[i].state == JOB_STOPPED) {
+            continue;
+        }
+
+        for (;;) {
+            int status;
+
+            /*
+             * Negative PGID means:
+             * wait for any child in this process group.
+             */
+            pid_t pid = waitpid(
+                -jobs[i].pgid,
+                &status,
+                WNOHANG
+            );
+
+            if (pid == 0) {
+                break;
             }
 
-            if (errno == EINTR) {
-                continue;
+            if (pid == -1) {
+                if (errno == EINTR) {
+                    continue;
+                }
+
+                if (errno == ECHILD) {
+                    break;
+                }
+
+                fprintf(
+                    stderr,
+                    "background waitpid failed: %s\n",
+                    strerror(errno)
+                );
+                break;
             }
 
-            fprintf(
-                stderr,
-                "background waitpid failed: %s\n",
-                strerror(errno)
-            );
-            return;
-        }
+            if (WIFEXITED(status)) {
+                printf(
+                    "[shell] background pid=%ld "
+                    "exited with status %d\n",
+                    (long)pid,
+                    WEXITSTATUS(status)
+                );
+            } else if (WIFSIGNALED(status)) {
+                printf(
+                    "[shell] background pid=%ld "
+                    "terminated by signal %d\n",
+                    (long)pid,
+                    WTERMSIG(status)
+                );
+            }
 
-        if (WIFEXITED(status)) {
-            printf(
-                "[shell] background pid=%ld "
-                "exited with status %d\n",
-                (long)pid,
-                WEXITSTATUS(status)
-            );
-        } else if (WIFSIGNALED(status)) {
-            printf(
-                "[shell] background pid=%ld "
-                "terminated by signal %d\n",
-                (long)pid,
-                WTERMSIG(status)
-            );
-        }
-
-        for (size_t i = 0; i < MAX_JOBS; ++i) {
-            if (!jobs[i].used) {
-                continue;
+            if (jobs[i].remaining > 0) {
+                --jobs[i].remaining;
             }
 
             /*
-             * For now one background job contains
-             * exactly one process, so pid == pgid.
+             * A job is complete only when every process
+             * in its process group has exited.
              */
-            if (jobs[i].pgid == pid) {
+            if (jobs[i].remaining == 0) {
                 printf(
                     "[%d] Done    %s\n",
                     jobs[i].id,
@@ -527,6 +546,7 @@ if (background) {
         jobs,
         next_job_id,
         child_pid,
+        1,
         argv
     );
 
@@ -581,6 +601,7 @@ if (background) {
             jobs,
             next_job_id,
             child_pid,
+            1,
             argv
         );
 
