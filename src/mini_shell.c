@@ -26,6 +26,39 @@ struct Job {
     char command[MAX_JOB_COMMAND];
 };
 
+static int is_builtin(
+    const char *name
+)
+{
+    return
+        strcmp(name, "exit") == 0 ||
+        strcmp(name, "cd") == 0 ||
+        strcmp(name, "jobs") == 0;
+}
+
+static void print_jobs(
+    const struct Job jobs[]
+)
+{
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+        if (!jobs[i].used) {
+            continue;
+        }
+
+        const char *state =
+            jobs[i].state == JOB_RUNNING
+                ? "Running"
+                : "Stopped";
+
+        printf(
+            "[%d] %-8s %s\n",
+            jobs[i].id,
+            state,
+            jobs[i].command
+        );
+    }
+}
+
 static int add_job(
     struct Job jobs[],
     int *next_job_id,
@@ -1017,19 +1050,19 @@ int main(void)
  * Builtins run inside the shell process.
  * For now they cannot be background jobs.
  */
-if (background &&
-    (strcmp(commands[0][0], "exit") == 0 ||
-     strcmp(commands[0][0], "cd") == 0)) {
-    fprintf(
-        stderr,
-        "mini-shell: builtins cannot run in background yet\n"
-    );
-    continue;
-}
+        if (background &&
+            is_builtin(commands[0][0])) {
+            fprintf(
+                stderr,
+                "mini-shell: builtins cannot run in background yet\n"
+            );
+            continue;
+        }
 
 /*
  * Pipeline.
  */
+
 
         if (command_count > 1) {
             if (background) {
@@ -1091,19 +1124,10 @@ if (background &&
                 i < command_count;
                 ++i
             ) {
-                if (
-                    strcmp(
-                        commands[i][0],
-                        "cd"
-                    ) == 0 ||
-                    strcmp(
-                        commands[i][0],
-                        "exit"
-                    ) == 0
-                ) {
-                    builtin_in_pipeline = 1;
-                    break;
-                }
+                if (is_builtin(commands[i][0])) {
+    builtin_in_pipeline = 1;
+    break;
+}
             }
 
             if (builtin_in_pipeline) {
@@ -1130,6 +1154,41 @@ if (background &&
 
             continue;
         }
+
+        /*
+ * jobs builtin
+ */
+if (
+    strcmp(
+        commands[0][0],
+        "jobs"
+    ) == 0
+) {
+    if (input_path != NULL ||
+        output_path != NULL) {
+        fprintf(
+            stderr,
+            "mini-shell: redirection for "
+            "builtins is not supported yet\n"
+        );
+
+        continue;
+    }
+
+    if (argcs[0] != 1) {
+        fprintf(
+            stderr,
+            "mini-shell: jobs: "
+            "too many arguments\n"
+        );
+
+        continue;
+    }
+
+    print_jobs(jobs);
+    continue;
+}
+
 
         /*
          * exit builtin
