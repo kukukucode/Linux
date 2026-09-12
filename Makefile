@@ -40,7 +40,7 @@ MINI_SHELL_SOURCES := \
 MINI_SHELL_HEADERS := src/mini_shell/mini_shell.h
 TARGETS += $(BUILD_DIR)/mini_shell
 
-.PHONY: all clean test
+.PHONY: all clean test sanitizer-test
 
 all: $(TARGETS)
 
@@ -95,6 +95,14 @@ test: all
 	@python3 tests/test_mini_shell.py
 
 	@echo "All checks passed."
+
+sanitizer-test:
+	$(MAKE) clean
+	ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
+	UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1' \
+	$(MAKE) \
+		CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Werror -g3 -O1 -fsanitize=address,undefined -fno-omit-frame-pointer' \
+		test
 
 clean:
 	rm -rf $(BUILD_DIR)
