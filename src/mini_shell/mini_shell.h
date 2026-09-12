@@ -23,6 +23,25 @@ struct Job {
     char command[MAX_JOB_COMMAND];
 };
 
+struct ParsedLine {
+    char *commands[MAX_COMMANDS][MAX_ARGS];
+    size_t argcs[MAX_COMMANDS];
+    size_t command_count;
+
+    char *input_path;
+    char *output_path;
+
+    size_t input_command;
+    size_t output_command;
+
+    int background;
+};
+
+int parse_line(
+    char *line,
+    struct ParsedLine *parsed
+);
+
 struct Job *find_job_by_id(
     struct Job jobs[],
     int id

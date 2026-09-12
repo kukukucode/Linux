@@ -88,197 +88,38 @@ int main(void)
          * commands[1] = {"tr", "a-z", "A-Z", NULL}
          * commands[2] = {"wc", "-c", NULL}
          */
-        char *commands[MAX_COMMANDS][MAX_ARGS];
-        size_t argcs[MAX_COMMANDS] = {0};
-        size_t command_count = 1;
+        struct ParsedLine parsed;
 
-        char *input_path = NULL;
-        char *output_path = NULL;
-
-        /*
-         * Remember which command contained
-         * each redirection.
-         */
-        size_t input_command = 0;
-        size_t output_command = 0;
-
-        int syntax_error = 0;
-        int background = 0;
-
-        char *saveptr = NULL;
-
-        char *token =
-            strtok_r(
-                line,
-                " \t\n",
-                &saveptr
-            );
-
-        while (token != NULL) {
-            size_t current =
-                command_count - 1;
-
-            if (strcmp(token, "&") == 0) {
-                if (background) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: multiple & operators\n"
-                    );
-                    syntax_error = 1;
-                    break;
-                }
-
-                background = 1;
-
-                token = strtok_r(
-                    NULL,
-                    " \t\n",
-                    &saveptr
-                );
-
-                if (token != NULL) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: & must appear at the end\n"
-                    );
-                    syntax_error = 1;
-                }
-
-                break;
-            } else if (strcmp(token, "|") == 0) {
-                if (argcs[current] == 0) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: expected command before |\n"
-                    );
-                    syntax_error = 1;
-                    break;
-                }
-
-                if (command_count >= MAX_COMMANDS) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: too many pipeline commands\n"
-                    );
-                    syntax_error = 1;
-                    break;
-                }
-
-                ++command_count;
-            } else if (
-                strcmp(token, "<") == 0
-            ) {
-                if (input_path != NULL) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: multiple "
-                        "input redirects\n"
-                    );
-
-                    syntax_error = 1;
-                    break;
-                }
-
-                token =
-                    strtok_r(
-                        NULL,
-                        " \t\n",
-                        &saveptr
-                    );
-
-                if (token == NULL ||
-                    strcmp(token, "<") == 0 ||
-                    strcmp(token, ">") == 0 ||
-                    strcmp(token, "|") == 0) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: expected "
-                        "filename after <\n"
-                    );
-
-                    syntax_error = 1;
-                    break;
-                }
-
-                input_path = token;
-                input_command = current;
-            } else if (
-                strcmp(token, ">") == 0
-            ) {
-                if (output_path != NULL) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: multiple "
-                        "output redirects\n"
-                    );
-
-                    syntax_error = 1;
-                    break;
-                }
-
-                token =
-                    strtok_r(
-                        NULL,
-                        " \t\n",
-                        &saveptr
-                    );
-
-                if (token == NULL ||
-                    strcmp(token, "<") == 0 ||
-                    strcmp(token, ">") == 0 ||
-                    strcmp(token, "|") == 0) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: expected "
-                        "filename after >\n"
-                    );
-
-                    syntax_error = 1;
-                    break;
-                }
-
-                output_path = token;
-                output_command = current;
-            } else {
-                if (argcs[current] >=
-                    MAX_ARGS - 1) {
-                    fprintf(
-                        stderr,
-                        "mini-shell: too many "
-                        "arguments\n"
-                    );
-
-                    syntax_error = 1;
-                    break;
-                }
-
-                commands[current]
-                        [argcs[current]++] =
-                    token;
-            }
-
-            token =
-                strtok_r(
-                    NULL,
-                    " \t\n",
-                    &saveptr
-                );
-        }
-
-        if (syntax_error) {
+        if (parse_line(line, &parsed) == -1) {
             continue;
         }
 
         /*
-         * execvp() requires NULL-terminated argv.
+         * Local aliases keep the rest of main()
+         * unchanged while parsing lives in parser.c.
          */
-        for (
-            size_t i = 0;
-            i < command_count;
-            ++i
-        ) {
-            commands[i][argcs[i]] = NULL;
-        }
+        char *(*commands)[MAX_ARGS] =
+            parsed.commands;
+
+        size_t *argcs = parsed.argcs;
+
+        size_t command_count =
+            parsed.command_count;
+
+        char *input_path =
+            parsed.input_path;
+
+        char *output_path =
+            parsed.output_path;
+
+        size_t input_command =
+            parsed.input_command;
+
+        size_t output_command =
+            parsed.output_command;
+
+        int background =
+            parsed.background;
 
         if (argcs[0] == 0) {
             continue;
