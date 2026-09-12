@@ -12,7 +12,9 @@ EXCLUDED_SOURCES := \
 SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/*.c))
 TARGETS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(SOURCES))
 
-MINI_SHELL_SOURCES := src/mini_shell/main.c
+MINI_SHELL_SOURCES := \
+	src/mini_shell/main.c \
+	src/mini_shell/jobs.c
 MINI_SHELL_HEADERS := src/mini_shell/mini_shell.h
 TARGETS += $(BUILD_DIR)/mini_shell
 

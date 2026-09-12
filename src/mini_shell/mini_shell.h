@@ -23,4 +23,34 @@ struct Job {
     char command[MAX_JOB_COMMAND];
 };
 
+struct Job *find_job_by_id(
+    struct Job jobs[],
+    int id
+);
+
+int foreground_job(
+    struct Job *job,
+    pid_t shell_pgid
+);
+
+int background_job(
+    struct Job *job
+);
+
+void print_jobs(
+    const struct Job jobs[]
+);
+
+int add_job(
+    struct Job jobs[],
+    int *next_job_id,
+    pid_t pgid,
+    size_t process_count,
+    char *argv[]
+);
+
+void reap_background_children(
+    struct Job jobs[]
+);
+
 #endif
