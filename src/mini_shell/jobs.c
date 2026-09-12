@@ -21,7 +21,7 @@ struct Job *find_job_by_id(struct Job jobs[], int id)
 int foreground_job(struct Job *job, pid_t shell_pgid)
 {
     /*
-     * Give the terminal to the job first.
+     * Give the terminal to the whole job process group.
      */
     if (tcsetpgrp(STDIN_FILENO, job->pgid) == -1) {
         fprintf(stderr, "mini-shell: fg: tcsetpgrp failed: %s\n",
@@ -30,18 +30,13 @@ int foreground_job(struct Job *job, pid_t shell_pgid)
     }
 
     /*
-     * A stopped job must be continued after it owns
-     * the foreground terminal.
+     * Resume the whole process group if the job was stopped.
      */
     if (job->state == JOB_STOPPED) {
         if (kill(-job->pgid, SIGCONT) == -1) {
             fprintf(stderr, "mini-shell: fg: SIGCONT failed: %s\n",
                     strerror(errno));
 
-            /*
-             * Give the terminal back to the shell
-             * before returning.
-             */
             if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
                 fprintf(stderr,
                         "mini-shell: fg: "
@@ -55,24 +50,75 @@ int foreground_job(struct Job *job, pid_t shell_pgid)
         job->state = JOB_RUNNING;
     }
 
-    int status;
+    size_t stopped_count = 0;
     int wait_failed = 0;
 
-    for (;;) {
-        pid_t result = waitpid(-job->pgid, &status, WUNTRACED);
+    /*
+     * A job may contain more than one process.
+     *
+     * Keep waiting for any child in the process group until:
+     *
+     * - every process has exited, or
+     * - every remaining process has stopped.
+     */
+    while (job->remaining > 0) {
+        int status;
+        pid_t result;
 
-        if (result == -1) {
-            if (errno == EINTR) {
+        for (;;) {
+            result = waitpid(-job->pgid, &status, WUNTRACED);
+
+            if (result == -1 && errno == EINTR) {
                 continue;
             }
 
-            fprintf(stderr, "mini-shell: fg: waitpid failed: %s\n",
-                    strerror(errno));
-
-            wait_failed = 1;
+            break;
         }
 
-        break;
+        if (result == -1) {
+            fprintf(stderr, "mini-shell: fg: waitpid failed: %s\n",
+                    strerror(errno));
+            wait_failed = 1;
+            break;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            --job->remaining;
+
+            if (job->remaining == 0) {
+                job->used = 0;
+                break;
+            }
+
+            /*
+             * Some processes may already be stopped while another
+             * process exits. In that case all surviving processes
+             * can now be stopped.
+             */
+            if (stopped_count >= job->remaining) {
+                job->state = JOB_STOPPED;
+
+                printf("[%d] Stopped    %s\n", job->id, job->command);
+                break;
+            }
+
+            continue;
+        }
+
+        if (WIFSTOPPED(status)) {
+            ++stopped_count;
+
+            /*
+             * Ctrl-Z is delivered to the foreground process group.
+             * Wait until all remaining members have reported stop.
+             */
+            if (stopped_count >= job->remaining) {
+                job->state = JOB_STOPPED;
+
+                printf("[%d] Stopped    %s\n", job->id, job->command);
+                break;
+            }
+        }
     }
 
     /*
@@ -88,14 +134,6 @@ int foreground_job(struct Job *job, pid_t shell_pgid)
 
     if (wait_failed) {
         return -1;
-    }
-
-    if (WIFSTOPPED(status)) {
-        job->state = JOB_STOPPED;
-
-        printf("[%d] Stopped    %s\n", job->id, job->command);
-    } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
-        job->used = 0;
     }
 
     return 0;
