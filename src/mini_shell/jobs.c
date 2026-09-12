@@ -176,8 +176,8 @@ void print_jobs(const struct Job jobs[])
     }
 }
 
-int add_job(struct Job jobs[], int *next_job_id, pid_t pgid,
-            size_t process_count, char *argv[])
+int add_job_text(struct Job jobs[], int *next_job_id, pid_t pgid,
+                 size_t process_count, const char *command)
 {
     for (size_t i = 0; i < MAX_JOBS; ++i) {
         if (jobs[i].used) {
@@ -192,31 +192,38 @@ int add_job(struct Job jobs[], int *next_job_id, pid_t pgid,
 
         ++(*next_job_id);
 
-        size_t offset = 0;
-
-        for (size_t j = 0; argv[j] != NULL; ++j) {
-            int written = snprintf(jobs[i].command + offset,
-                                   sizeof(jobs[i].command) - offset, "%s%s",
-                                   j == 0 ? "" : " ", argv[j]);
-
-            if (written < 0) {
-                jobs[i].command[0] = '\0';
-                break;
-            }
-
-            size_t amount = (size_t)written;
-
-            if (amount >= sizeof(jobs[i].command) - offset) {
-                break;
-            }
-
-            offset += amount;
-        }
+        snprintf(jobs[i].command, sizeof(jobs[i].command), "%s", command);
 
         return jobs[i].id;
     }
 
     return -1;
+}
+
+int add_job(struct Job jobs[], int *next_job_id, pid_t pgid,
+            size_t process_count, char *argv[])
+{
+    char command[MAX_JOB_COMMAND] = "";
+    size_t offset = 0;
+
+    for (size_t i = 0; argv[i] != NULL; ++i) {
+        int written = snprintf(command + offset, sizeof(command) - offset,
+                               "%s%s", i == 0 ? "" : " ", argv[i]);
+
+        if (written < 0) {
+            return -1;
+        }
+
+        size_t amount = (size_t)written;
+
+        if (amount >= sizeof(command) - offset) {
+            break;
+        }
+
+        offset += amount;
+    }
+
+    return add_job_text(jobs, next_job_id, pgid, process_count, command);
 }
 
 void reap_background_children(struct Job jobs[])

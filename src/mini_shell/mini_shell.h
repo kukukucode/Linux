@@ -44,6 +44,9 @@ int background_job(struct Job *job);
 
 void print_jobs(const struct Job jobs[]);
 
+int add_job_text(struct Job jobs[], int *next_job_id, pid_t pgid,
+                 size_t process_count, const char *command);
+
 int add_job(struct Job jobs[], int *next_job_id, pid_t pgid,
             size_t process_count, char *argv[]);
 
