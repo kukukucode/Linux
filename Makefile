@@ -12,6 +12,9 @@ EXCLUDED_SOURCES := \
 SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/*.c))
 TARGETS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(SOURCES))
 
+MINI_SHELL_SOURCES := src/mini_shell/main.c
+TARGETS += $(BUILD_DIR)/mini_shell
+
 .PHONY: all clean test
 
 all: $(TARGETS)
@@ -21,6 +24,9 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/%: src/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(BUILD_DIR)/mini_shell: $(MINI_SHELL_SOURCES) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(MINI_SHELL_SOURCES) -o $@
 
 test: all
 	@output=`$(BUILD_DIR)/hello`; \
