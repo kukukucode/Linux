@@ -6,8 +6,8 @@ BUILD_DIR := build
 
 # Intentionally broken programs are excluded from normal CI.
 EXCLUDED_SOURCES := \
-	src/ownership_uaf.c \
-	src/ownership_double_free.c
+	src/memory/ownership_uaf.c \
+	src/memory/ownership_double_free.c
 
 SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/*.c))
 TARGETS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(SOURCES))
@@ -15,6 +15,10 @@ TARGETS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(SOURCES))
 PROCESS_SOURCES := $(wildcard src/process/*.c)
 PROCESS_TARGETS := $(patsubst src/process/%.c,$(BUILD_DIR)/%,$(PROCESS_SOURCES))
 TARGETS += $(PROCESS_TARGETS)
+
+MEMORY_SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/memory/*.c))
+MEMORY_TARGETS := $(patsubst src/memory/%.c,$(BUILD_DIR)/%,$(MEMORY_SOURCES))
+TARGETS += $(MEMORY_TARGETS)
 
 MINI_SHELL_SOURCES := \
 	src/mini_shell/main.c \
@@ -35,6 +39,9 @@ $(BUILD_DIR)/%: src/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(PROCESS_TARGETS): $(BUILD_DIR)/%: src/process/%.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(MEMORY_TARGETS): $(BUILD_DIR)/%: src/memory/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/mini_shell: $(MINI_SHELL_SOURCES) $(MINI_SHELL_HEADERS) | $(BUILD_DIR)
