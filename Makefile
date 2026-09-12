@@ -46,6 +46,8 @@ test: all
 	@output=`$(BUILD_DIR)/pipeline_two`; \
 		printf '%s\n' "$$output" | grep -q '^6$$'
 
+	@python3 tests/test_mini_shell.py
+
 	@echo "All checks passed."
 
 clean:
