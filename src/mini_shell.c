@@ -47,7 +47,7 @@ static int foreground_job(
 )
 {
     /*
-     * Give the terminal to the job's process group.
+     * Give the terminal to the job first.
      */
     if (tcsetpgrp(
             STDIN_FILENO,
@@ -61,13 +61,43 @@ static int foreground_job(
         return -1;
     }
 
+    /*
+     * A stopped job must be continued after it owns
+     * the foreground terminal.
+     */
+    if (job->state == JOB_STOPPED) {
+        if (kill(-job->pgid, SIGCONT) == -1) {
+            fprintf(
+                stderr,
+                "mini-shell: fg: SIGCONT failed: %s\n",
+                strerror(errno)
+            );
+
+            /*
+             * Give the terminal back to the shell
+             * before returning.
+             */
+            if (tcsetpgrp(
+                    STDIN_FILENO,
+                    shell_pgid
+                ) == -1) {
+                fprintf(
+                    stderr,
+                    "mini-shell: fg: "
+                    "could not reclaim terminal: %s\n",
+                    strerror(errno)
+                );
+            }
+
+            return -1;
+        }
+
+        job->state = JOB_RUNNING;
+    }
+
     int status;
     int wait_failed = 0;
 
-    /*
-     * For now a background job contains one process.
-     * Using -pgid prepares us for pipeline jobs later.
-     */
     for (;;) {
         pid_t result = waitpid(
             -job->pgid,
@@ -93,7 +123,7 @@ static int foreground_job(
     }
 
     /*
-     * The shell must always take the terminal back.
+     * Shell takes the terminal back.
      */
     if (tcsetpgrp(
             STDIN_FILENO,
@@ -1495,15 +1525,6 @@ if (
             stderr,
             "mini-shell: fg: no such job: %ld\n",
             job_id
-        );
-        continue;
-    }
-
-    if (job->state != JOB_RUNNING) {
-        fprintf(
-            stderr,
-            "mini-shell: fg: stopped jobs "
-            "are not supported yet\n"
         );
         continue;
     }
