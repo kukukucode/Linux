@@ -12,6 +12,10 @@ EXCLUDED_SOURCES := \
 SOURCES := $(filter-out $(EXCLUDED_SOURCES),$(wildcard src/*.c))
 TARGETS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(SOURCES))
 
+PROCESS_SOURCES := $(wildcard src/process/*.c)
+PROCESS_TARGETS := $(patsubst src/process/%.c,$(BUILD_DIR)/%,$(PROCESS_SOURCES))
+TARGETS += $(PROCESS_TARGETS)
+
 MINI_SHELL_SOURCES := \
 	src/mini_shell/main.c \
 	src/mini_shell/jobs.c \
@@ -28,6 +32,9 @@ $(BUILD_DIR):
 	mkdir -p $@
 
 $(BUILD_DIR)/%: src/%.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(PROCESS_TARGETS): $(BUILD_DIR)/%: src/process/%.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/mini_shell: $(MINI_SHELL_SOURCES) $(MINI_SHELL_HEADERS) | $(BUILD_DIR)
