@@ -10,6 +10,72 @@
 
 #define MAX_ARGS 64
 #define MAX_COMMANDS 16
+#define MAX_JOBS 16
+#define MAX_JOB_COMMAND 256
+
+enum JobState {
+    JOB_RUNNING,
+    JOB_STOPPED
+};
+
+struct Job {
+    int used;
+    int id;
+    pid_t pgid;
+    enum JobState state;
+    char command[MAX_JOB_COMMAND];
+};
+
+static int add_job(
+    struct Job jobs[],
+    int *next_job_id,
+    pid_t pgid,
+    char *argv[]
+)
+{
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+        if (jobs[i].used) {
+            continue;
+        }
+
+        jobs[i].used = 1;
+        jobs[i].id = *next_job_id;
+        jobs[i].pgid = pgid;
+        jobs[i].state = JOB_RUNNING;
+
+        ++(*next_job_id);
+
+        size_t offset = 0;
+
+        for (size_t j = 0; argv[j] != NULL; ++j) {
+            int written = snprintf(
+                jobs[i].command + offset,
+                sizeof(jobs[i].command) - offset,
+                "%s%s",
+                j == 0 ? "" : " ",
+                argv[j]
+            );
+
+            if (written < 0) {
+                jobs[i].command[0] = '\0';
+                break;
+            }
+
+            size_t amount = (size_t)written;
+
+            if (amount >=
+                sizeof(jobs[i].command) - offset) {
+                break;
+            }
+
+            offset += amount;
+        }
+
+        return jobs[i].id;
+    }
+
+    return -1;
+}
 
 static int set_signal(int signal_number, void (*handler)(int))
 {
@@ -114,7 +180,9 @@ static int cleanup_stopped_job(pid_t pgid)
     return 0;
 }
 
-static void reap_background_children(void)
+static void reap_background_children(
+    struct Job jobs[]
+)
 {
     for (;;) {
         int status;
@@ -161,15 +229,38 @@ static void reap_background_children(void)
                 WTERMSIG(status)
             );
         }
+
+        for (size_t i = 0; i < MAX_JOBS; ++i) {
+            if (!jobs[i].used) {
+                continue;
+            }
+
+            /*
+             * Right now one background job contains
+             * exactly one process, so pid == pgid.
+             */
+            if (jobs[i].pgid == pid) {
+                printf(
+                    "[%d] Done    %s\n",
+                    jobs[i].id,
+                    jobs[i].command
+                );
+
+                jobs[i].used = 0;
+                break;
+            }
+        }
+        }
     }
-}
 
 static int run_command(
     char *argv[],
     pid_t shell_pgid,
     const char *input_path,
     const char *output_path,
-    int background
+    int background,
+    struct Job jobs[],
+    int *next_job_id
 )
 {
     pid_t child_pid = fork();
@@ -228,14 +319,33 @@ static int run_command(
         return -1;
     }
 if (background) {
+    int job_id = add_job(
+        jobs,
+        next_job_id,
+        child_pid,
+        argv
+    );
+
+    if (job_id == -1) {
+        fprintf(
+            stderr,
+            "mini-shell: job table is full\n"
+        );
+
+        kill(-child_pid, SIGTERM);
+        waitpid(child_pid, NULL, 0);
+        return -1;
+    }
+
     printf(
-        "[shell] background pid=%ld pgid=%ld\n",
-        (long)child_pid,
+        "[%d] %ld\n",
+        job_id,
         (long)child_pid
     );
 
     return 0;
 }
+
     if (tcsetpgrp(STDIN_FILENO, child_pid) == -1) {
         fprintf(stderr, "tcsetpgrp child failed: %s\n", strerror(errno));
         return -1;
@@ -663,12 +773,14 @@ int main(void)
         );
         return EXIT_FAILURE;
     }
+    struct Job jobs[MAX_JOBS] = {0};
+    int next_job_id = 1;
 
     char *line = NULL;
     size_t capacity = 0;
 
     for (;;) {
-    reap_background_children();
+    reap_background_children(jobs);
 
     printf("mini$ ");
         fflush(stdout);
@@ -901,6 +1013,24 @@ int main(void)
             continue;
         }
 
+        /*
+ * Builtins run inside the shell process.
+ * For now they cannot be background jobs.
+ */
+if (background &&
+    (strcmp(commands[0][0], "exit") == 0 ||
+     strcmp(commands[0][0], "cd") == 0)) {
+    fprintf(
+        stderr,
+        "mini-shell: builtins cannot run in background yet\n"
+    );
+    continue;
+}
+
+/*
+ * Pipeline.
+ */
+
         if (command_count > 1) {
             if (background) {
     fprintf(
@@ -952,15 +1082,7 @@ int main(void)
 
                 continue;
             }
-            if (background &&
-    (strcmp(commands[0][0], "exit") == 0 ||
-     strcmp(commands[0][0], "cd") == 0)) {
-    fprintf(
-        stderr,
-        "mini-shell: builtins cannot run in background yet\n"
-    );
-    continue;
-}
+
 
             int builtin_in_pipeline = 0;
 
@@ -1101,7 +1223,9 @@ int main(void)
         shell_pgid,
         input_path,
         output_path,
-        background
+        background,
+        jobs,
+        &next_job_id
     ) == -1) {
             free(line);
             return EXIT_FAILURE;
