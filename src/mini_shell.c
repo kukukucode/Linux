@@ -26,6 +26,110 @@ struct Job {
     char command[MAX_JOB_COMMAND];
 };
 
+static struct Job *find_job_by_id(
+    struct Job jobs[],
+    int id
+)
+{
+    for (size_t i = 0; i < MAX_JOBS; ++i) {
+        if (jobs[i].used &&
+            jobs[i].id == id) {
+            return &jobs[i];
+        }
+    }
+
+    return NULL;
+}
+
+static int foreground_job(
+    struct Job *job,
+    pid_t shell_pgid
+)
+{
+    /*
+     * Give the terminal to the job's process group.
+     */
+    if (tcsetpgrp(
+            STDIN_FILENO,
+            job->pgid
+        ) == -1) {
+        fprintf(
+            stderr,
+            "mini-shell: fg: tcsetpgrp failed: %s\n",
+            strerror(errno)
+        );
+        return -1;
+    }
+
+    int status;
+    int wait_failed = 0;
+
+    /*
+     * For now a background job contains one process.
+     * Using -pgid prepares us for pipeline jobs later.
+     */
+    for (;;) {
+        pid_t result = waitpid(
+            -job->pgid,
+            &status,
+            WUNTRACED
+        );
+
+        if (result == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            fprintf(
+                stderr,
+                "mini-shell: fg: waitpid failed: %s\n",
+                strerror(errno)
+            );
+
+            wait_failed = 1;
+        }
+
+        break;
+    }
+
+    /*
+     * The shell must always take the terminal back.
+     */
+    if (tcsetpgrp(
+            STDIN_FILENO,
+            shell_pgid
+        ) == -1) {
+        fprintf(
+            stderr,
+            "mini-shell: fg: "
+            "could not reclaim terminal: %s\n",
+            strerror(errno)
+        );
+        return -1;
+    }
+
+    if (wait_failed) {
+        return -1;
+    }
+
+    if (WIFSTOPPED(status)) {
+        job->state = JOB_STOPPED;
+
+        printf(
+            "[%d] Stopped    %s\n",
+            job->id,
+            job->command
+        );
+    } else if (
+        WIFEXITED(status) ||
+        WIFSIGNALED(status)
+    ) {
+        job->used = 0;
+    }
+
+    return 0;
+}
+
 static int is_builtin(
     const char *name
 )
@@ -33,7 +137,8 @@ static int is_builtin(
     return
         strcmp(name, "exit") == 0 ||
         strcmp(name, "cd") == 0 ||
-        strcmp(name, "jobs") == 0;
+        strcmp(name, "jobs") == 0 ||
+        strcmp(name, "fg") == 0;
 }
 
 static void print_jobs(
@@ -1189,6 +1294,91 @@ if (
     continue;
 }
 
+/*
+ * fg builtin
+ */
+if (
+    strcmp(
+        commands[0][0],
+        "fg"
+    ) == 0
+) {
+    if (input_path != NULL ||
+        output_path != NULL) {
+        fprintf(
+            stderr,
+            "mini-shell: redirection for "
+            "builtins is not supported yet\n"
+        );
+        continue;
+    }
+
+    if (argcs[0] != 2) {
+        fprintf(
+            stderr,
+            "mini-shell: usage: fg JOB_ID\n"
+        );
+        continue;
+    }
+
+    char *end = NULL;
+    errno = 0;
+
+    long job_id = strtol(
+        commands[0][1],
+        &end,
+        10
+    );
+
+    if (errno != 0 ||
+        end == commands[0][1] ||
+        *end != '\0' ||
+        job_id <= 0) {
+        fprintf(
+            stderr,
+            "mini-shell: fg: invalid job id: %s\n",
+            commands[0][1]
+        );
+        continue;
+    }
+
+    struct Job *job =
+        find_job_by_id(
+            jobs,
+            (int)job_id
+        );
+
+    if (job == NULL) {
+        fprintf(
+            stderr,
+            "mini-shell: fg: no such job: %ld\n",
+            job_id
+        );
+        continue;
+    }
+
+    if (job->state != JOB_RUNNING) {
+        fprintf(
+            stderr,
+            "mini-shell: fg: stopped jobs "
+            "are not supported yet\n"
+        );
+        continue;
+    }
+
+    printf("%s\n", job->command);
+    fflush(stdout);
+
+    if (foreground_job(
+            job,
+            shell_pgid
+        ) == -1) {
+        free(line);
+        return EXIT_FAILURE;
+    }
+
+    continue;
+}
 
         /*
          * exit builtin
