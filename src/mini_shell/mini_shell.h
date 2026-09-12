@@ -60,6 +60,7 @@ int run_command(char *argv[], pid_t shell_pgid, const char *input_path,
 
 int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
                  pid_t shell_pgid, const char *input_path,
-                 const char *output_path);
+                 const char *output_path, int background, struct Job jobs[],
+                 int *next_job_id);
 
 #endif

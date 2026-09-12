@@ -116,11 +116,6 @@ int main(void)
          */
 
         if (command_count > 1) {
-            if (background) {
-                fprintf(stderr, "mini-shell: background pipelines "
-                                "are not supported yet\n");
-                continue;
-            }
             if (argcs[command_count - 1] == 0) {
                 fprintf(stderr, "mini-shell: expected "
                                 "command after |\n");
@@ -168,7 +163,8 @@ int main(void)
             }
 
             if (run_pipeline(commands, command_count, shell_pgid, input_path,
-                             output_path) == -1) {
+                             output_path, background, jobs,
+                             &next_job_id) == -1) {
                 free(line);
                 return EXIT_FAILURE;
             }

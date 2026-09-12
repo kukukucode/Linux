@@ -2,6 +2,7 @@
 
 import os
 import pty
+import re
 import select
 import signal
 import sys
@@ -189,6 +190,45 @@ def main():
         if "sleep 30" in output:
             raise RuntimeError(
                 "finished foreground job remained in jobs\n"
+                "output:\n{}".format(output)
+            )
+
+        # Background pipeline
+        send(fd, "sleep 30 | cat &")
+        output = read_until(fd, PROMPT)
+
+        match = re.search(r"\[(\d+)\]\s+\d+", output)
+
+        if match is None:
+            raise RuntimeError(
+                "background pipeline did not report a job id\n"
+                "output:\n{}".format(output)
+            )
+
+        pipeline_job_id = match.group(1)
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Running  sleep 30 | cat",
+            "jobs shows background pipeline",
+        )
+
+        send(fd, "fg {}".format(pipeline_job_id))
+
+        time.sleep(0.2)
+
+        os.write(fd, CTRL_C)
+
+        read_until(fd, PROMPT)
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+
+        if "sleep 30 | cat" in output:
+            raise RuntimeError(
+                "finished pipeline remained in jobs\n"
                 "output:\n{}".format(output)
             )
 

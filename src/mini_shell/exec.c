@@ -323,9 +323,60 @@ static void exec_pipeline_child(char *argv[], pid_t pgid, size_t index,
     _exit(127);
 }
 
+static void append_job_text(char *buffer, size_t buffer_size, size_t *offset,
+                            const char *text)
+{
+    if (*offset >= buffer_size) {
+        return;
+    }
+
+    int written = snprintf(buffer + *offset, buffer_size - *offset, "%s", text);
+
+    if (written < 0) {
+        return;
+    }
+
+    size_t amount = (size_t)written;
+
+    if (amount >= buffer_size - *offset) {
+        *offset = buffer_size;
+        return;
+    }
+
+    *offset += amount;
+}
+
+static void format_pipeline_command(char *buffer, size_t buffer_size,
+                                    char *commands[][MAX_ARGS],
+                                    size_t command_count)
+{
+    size_t offset = 0;
+
+    if (buffer_size == 0) {
+        return;
+    }
+
+    buffer[0] = '\0';
+
+    for (size_t i = 0; i < command_count; ++i) {
+        if (i != 0) {
+            append_job_text(buffer, buffer_size, &offset, " | ");
+        }
+
+        for (size_t j = 0; commands[i][j] != NULL; ++j) {
+            if (j != 0) {
+                append_job_text(buffer, buffer_size, &offset, " ");
+            }
+
+            append_job_text(buffer, buffer_size, &offset, commands[i][j]);
+        }
+    }
+}
+
 int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
                  pid_t shell_pgid, const char *input_path,
-                 const char *output_path)
+                 const char *output_path, int background, struct Job jobs[],
+                 int *next_job_id)
 {
     int pipes[MAX_COMMANDS - 1][2];
     size_t pipe_count = command_count - 1;
@@ -404,6 +455,31 @@ int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
      * The shell must not keep pipe ends open.
      */
     close_all_pipes(pipes, pipe_count);
+
+    if (background) {
+        char command[MAX_JOB_COMMAND];
+
+        format_pipeline_command(command, sizeof(command), commands,
+                                command_count);
+
+        int job_id = add_job_text(jobs, next_job_id, pipeline_pgid,
+                                  command_count, command);
+
+        if (job_id == -1) {
+            fprintf(stderr, "mini-shell: job table is full\n");
+
+            kill(-pipeline_pgid, SIGTERM);
+
+            while (waitpid(-pipeline_pgid, NULL, 0) != -1) {
+            }
+
+            return -1;
+        }
+
+        printf("[%d] %ld\n", job_id, (long)pipeline_pgid);
+
+        return 0;
+    }
 
     /*
      * Give the terminal to the whole pipeline.
