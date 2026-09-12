@@ -374,7 +374,7 @@ static void reap_background_children(
             }
 
             /*
-             * Right now one background job contains
+             * For now one background job contains
              * exactly one process, so pid == pgid.
              */
             if (jobs[i].pgid == pid) {
@@ -388,8 +388,8 @@ static void reap_background_children(
                 break;
             }
         }
-        }
     }
+}
 
 static int run_command(
     char *argv[],
@@ -511,23 +511,59 @@ if (background) {
             WTERMSIG(status)
         );
     } else if (WIFSTOPPED(status)) {
-        printf(
-            "[shell] child stopped by signal %d\n",
-            WSTOPSIG(status)
+        int job_id = add_job(
+            jobs,
+            next_job_id,
+            child_pid,
+            argv
         );
 
-        if (cleanup_stopped_job(child_pid) == -1) {
+        if (job_id == -1) {
+            fprintf(
+                stderr,
+                "mini-shell: job table is full\n"
+            );
+
+            /*
+             * Do not leave an untracked stopped child.
+             */
+            if (cleanup_stopped_job(child_pid) == -1) {
+                return -1;
+            }
+
+            if (waitpid(child_pid, NULL, 0) == -1) {
+                fprintf(
+                    stderr,
+                    "cleanup waitpid failed: %s\n",
+                    strerror(errno)
+                );
+                return -1;
+            }
+
             return -1;
         }
 
-        if (waitpid(child_pid, NULL, 0) == -1) {
+        struct Job *job =
+            find_job_by_id(
+                jobs,
+                job_id
+            );
+
+        if (job == NULL) {
             fprintf(
                 stderr,
-                "cleanup waitpid failed: %s\n",
-                strerror(errno)
+                "mini-shell: internal job lookup failed\n"
             );
             return -1;
         }
+
+        job->state = JOB_STOPPED;
+
+        printf(
+            "[%d] Stopped    %s\n",
+            job->id,
+            job->command
+        );
     }
 
     return 0;
