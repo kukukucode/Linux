@@ -40,12 +40,7 @@ static int restore_child_signals(void)
     return 0;
 }
 
-static int redirect_fd(
-    const char *path,
-    int flags,
-    mode_t mode,
-    int target_fd
-)
+static int redirect_fd(const char *path, int flags, mode_t mode, int target_fd)
 {
     int fd;
 
@@ -56,12 +51,7 @@ static int redirect_fd(
     }
 
     if (fd == -1) {
-        fprintf(
-            stderr,
-            "mini-shell: %s: %s\n",
-            path,
-            strerror(errno)
-        );
+        fprintf(stderr, "mini-shell: %s: %s\n", path, strerror(errno));
         return -1;
     }
 
@@ -112,15 +102,9 @@ static int cleanup_stopped_job(pid_t pgid)
     return 0;
 }
 
-int run_command(
-    char *argv[],
-    pid_t shell_pgid,
-    const char *input_path,
-    const char *output_path,
-    int background,
-    struct Job jobs[],
-    int *next_job_id
-)
+int run_command(char *argv[], pid_t shell_pgid, const char *input_path,
+                const char *output_path, int background, struct Job jobs[],
+                int *next_job_id)
 {
     pid_t child_pid = fork();
 
@@ -140,35 +124,21 @@ int run_command(
         }
 
         if (input_path != NULL) {
-            if (redirect_fd(
-                    input_path,
-                    O_RDONLY,
-                    0,
-                    STDIN_FILENO
-                ) == -1) {
+            if (redirect_fd(input_path, O_RDONLY, 0, STDIN_FILENO) == -1) {
                 _exit(127);
             }
         }
 
         if (output_path != NULL) {
-            if (redirect_fd(
-                    output_path,
-                    O_WRONLY | O_CREAT | O_TRUNC,
-                    0666,
-                    STDOUT_FILENO
-                ) == -1) {
+            if (redirect_fd(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0666,
+                            STDOUT_FILENO) == -1) {
                 _exit(127);
             }
         }
 
         execvp(argv[0], argv);
 
-        fprintf(
-            stderr,
-            "mini-shell: %s: %s\n",
-            argv[0],
-            strerror(errno)
-        );
+        fprintf(stderr, "mini-shell: %s: %s\n", argv[0], strerror(errno));
 
         _exit(127);
     }
@@ -177,34 +147,21 @@ int run_command(
         fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
         return -1;
     }
-if (background) {
-    int job_id = add_job(
-        jobs,
-        next_job_id,
-        child_pid,
-        1,
-        argv
-    );
+    if (background) {
+        int job_id = add_job(jobs, next_job_id, child_pid, 1, argv);
 
-    if (job_id == -1) {
-        fprintf(
-            stderr,
-            "mini-shell: job table is full\n"
-        );
+        if (job_id == -1) {
+            fprintf(stderr, "mini-shell: job table is full\n");
 
-        kill(-child_pid, SIGTERM);
-        waitpid(child_pid, NULL, 0);
-        return -1;
+            kill(-child_pid, SIGTERM);
+            waitpid(child_pid, NULL, 0);
+            return -1;
+        }
+
+        printf("[%d] %ld\n", job_id, (long)child_pid);
+
+        return 0;
     }
-
-    printf(
-        "[%d] %ld\n",
-        job_id,
-        (long)child_pid
-    );
-
-    return 0;
-}
 
     if (tcsetpgrp(STDIN_FILENO, child_pid) == -1) {
         fprintf(stderr, "tcsetpgrp child failed: %s\n", strerror(errno));
@@ -223,29 +180,14 @@ if (background) {
     }
 
     if (WIFEXITED(status)) {
-        printf(
-            "[shell] child exited with status %d\n",
-            WEXITSTATUS(status)
-        );
+        printf("[shell] child exited with status %d\n", WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
-        printf(
-            "[shell] child terminated by signal %d\n",
-            WTERMSIG(status)
-        );
+        printf("[shell] child terminated by signal %d\n", WTERMSIG(status));
     } else if (WIFSTOPPED(status)) {
-        int job_id = add_job(
-            jobs,
-            next_job_id,
-            child_pid,
-            1,
-            argv
-        );
+        int job_id = add_job(jobs, next_job_id, child_pid, 1, argv);
 
         if (job_id == -1) {
-            fprintf(
-                stderr,
-                "mini-shell: job table is full\n"
-            );
+            fprintf(stderr, "mini-shell: job table is full\n");
 
             /*
              * Do not leave an untracked stopped child.
@@ -255,47 +197,30 @@ if (background) {
             }
 
             if (waitpid(child_pid, NULL, 0) == -1) {
-                fprintf(
-                    stderr,
-                    "cleanup waitpid failed: %s\n",
-                    strerror(errno)
-                );
+                fprintf(stderr, "cleanup waitpid failed: %s\n",
+                        strerror(errno));
                 return -1;
             }
 
             return -1;
         }
 
-        struct Job *job =
-            find_job_by_id(
-                jobs,
-                job_id
-            );
+        struct Job *job = find_job_by_id(jobs, job_id);
 
         if (job == NULL) {
-            fprintf(
-                stderr,
-                "mini-shell: internal job lookup failed\n"
-            );
+            fprintf(stderr, "mini-shell: internal job lookup failed\n");
             return -1;
         }
 
         job->state = JOB_STOPPED;
 
-        printf(
-            "[%d] Stopped    %s\n",
-            job->id,
-            job->command
-        );
+        printf("[%d] Stopped    %s\n", job->id, job->command);
     }
 
     return 0;
 }
 
-static void close_all_pipes(
-    int pipes[][2],
-    size_t pipe_count
-)
+static void close_all_pipes(int pipes[][2], size_t pipe_count)
 {
     for (size_t i = 0; i < pipe_count; ++i) {
         close(pipes[i][0]);
@@ -303,15 +228,9 @@ static void close_all_pipes(
     }
 }
 
-static void exec_pipeline_child(
-    char *argv[],
-    pid_t pgid,
-    size_t index,
-    size_t command_count,
-    int pipes[][2],
-    const char *input_path,
-    const char *output_path
-)
+static void exec_pipeline_child(char *argv[], pid_t pgid, size_t index,
+                                size_t command_count, int pipes[][2],
+                                const char *input_path, const char *output_path)
 {
     if (setpgid(0, pgid) == -1) {
         fprintf(stderr, "setpgid failed: %s\n", strerror(errno));
@@ -332,12 +251,7 @@ static void exec_pipeline_child(
          *     file < cmd0 | cmd1 | ...
          */
         if (input_path != NULL) {
-            if (redirect_fd(
-                    input_path,
-                    O_RDONLY,
-                    0,
-                    STDIN_FILENO
-                ) == -1) {
+            if (redirect_fd(input_path, O_RDONLY, 0, STDIN_FILENO) == -1) {
                 _exit(127);
             }
         }
@@ -346,15 +260,8 @@ static void exec_pipeline_child(
          * All commands except the first read from
          * the previous pipe.
          */
-        if (dup2(
-                pipes[index - 1][0],
-                STDIN_FILENO
-            ) == -1) {
-            fprintf(
-                stderr,
-                "dup2 stdin failed: %s\n",
-                strerror(errno)
-            );
+        if (dup2(pipes[index - 1][0], STDIN_FILENO) == -1) {
+            fprintf(stderr, "dup2 stdin failed: %s\n", strerror(errno));
             _exit(127);
         }
     }
@@ -369,12 +276,8 @@ static void exec_pipeline_child(
          *     ... | cmdN > file
          */
         if (output_path != NULL) {
-            if (redirect_fd(
-                    output_path,
-                    O_WRONLY | O_CREAT | O_TRUNC,
-                    0666,
-                    STDOUT_FILENO
-                ) == -1) {
+            if (redirect_fd(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0666,
+                            STDOUT_FILENO) == -1) {
                 _exit(127);
             }
         }
@@ -383,15 +286,8 @@ static void exec_pipeline_child(
          * All commands except the last write to
          * the next pipe.
          */
-        if (dup2(
-                pipes[index][1],
-                STDOUT_FILENO
-            ) == -1) {
-            fprintf(
-                stderr,
-                "dup2 stdout failed: %s\n",
-                strerror(errno)
-            );
+        if (dup2(pipes[index][1], STDOUT_FILENO) == -1) {
+            fprintf(stderr, "dup2 stdout failed: %s\n", strerror(errno));
             _exit(127);
         }
     }
@@ -400,30 +296,18 @@ static void exec_pipeline_child(
      * After dup2(), the child no longer needs any
      * original pipe descriptors.
      */
-    close_all_pipes(
-        pipes,
-        command_count - 1
-    );
+    close_all_pipes(pipes, command_count - 1);
 
     execvp(argv[0], argv);
 
-    fprintf(
-        stderr,
-        "mini-shell: %s: %s\n",
-        argv[0],
-        strerror(errno)
-    );
+    fprintf(stderr, "mini-shell: %s: %s\n", argv[0], strerror(errno));
 
     _exit(127);
 }
 
-int run_pipeline(
-    char *commands[][MAX_ARGS],
-    size_t command_count,
-    pid_t shell_pgid,
-    const char *input_path,
-    const char *output_path
-)
+int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
+                 pid_t shell_pgid, const char *input_path,
+                 const char *output_path)
 {
     int pipes[MAX_COMMANDS - 1][2];
     size_t pipe_count = command_count - 1;
@@ -433,11 +317,7 @@ int run_pipeline(
      */
     for (size_t i = 0; i < pipe_count; ++i) {
         if (pipe(pipes[i]) == -1) {
-            fprintf(
-                stderr,
-                "pipe failed: %s\n",
-                strerror(errno)
-            );
+            fprintf(stderr, "pipe failed: %s\n", strerror(errno));
 
             close_all_pipes(pipes, i);
             return -1;
@@ -453,24 +333,14 @@ int run_pipeline(
         pid_t pid = fork();
 
         if (pid == -1) {
-            fprintf(
-                stderr,
-                "fork failed: %s\n",
-                strerror(errno)
-            );
+            fprintf(stderr, "fork failed: %s\n", strerror(errno));
 
             close_all_pipes(pipes, pipe_count);
 
             if (pipeline_pgid != 0) {
                 kill(-pipeline_pgid, SIGTERM);
 
-                while (
-                    waitpid(
-                        -pipeline_pgid,
-                        NULL,
-                        0
-                    ) != -1
-                ) {
+                while (waitpid(-pipeline_pgid, NULL, 0) != -1) {
                 }
             }
 
@@ -482,20 +352,10 @@ int run_pipeline(
              * First child creates the PGID.
              * Later children join it.
              */
-            pid_t child_pgid =
-                pipeline_pgid == 0
-                    ? 0
-                    : pipeline_pgid;
+            pid_t child_pgid = pipeline_pgid == 0 ? 0 : pipeline_pgid;
 
-            exec_pipeline_child(
-                commands[i],
-                child_pgid,
-                i,
-                command_count,
-                pipes,
-                input_path,
-                output_path
-            );
+            exec_pipeline_child(commands[i], child_pgid, i, command_count,
+                                pipes, input_path, output_path);
         }
 
         /*
@@ -510,25 +370,14 @@ int run_pipeline(
          * Parent also calls setpgid()
          * to avoid relying on scheduling order.
          */
-        if (setpgid(pid, pipeline_pgid) == -1 &&
-            errno != EACCES) {
-            fprintf(
-                stderr,
-                "parent setpgid failed: %s\n",
-                strerror(errno)
-            );
+        if (setpgid(pid, pipeline_pgid) == -1 && errno != EACCES) {
+            fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
 
             close_all_pipes(pipes, pipe_count);
 
             kill(-pipeline_pgid, SIGTERM);
 
-            while (
-                waitpid(
-                    -pipeline_pgid,
-                    NULL,
-                    0
-                ) != -1
-            ) {
+            while (waitpid(-pipeline_pgid, NULL, 0) != -1) {
             }
 
             return -1;
@@ -543,15 +392,8 @@ int run_pipeline(
     /*
      * Give the terminal to the whole pipeline.
      */
-    if (tcsetpgrp(
-            STDIN_FILENO,
-            pipeline_pgid
-        ) == -1) {
-        fprintf(
-            stderr,
-            "tcsetpgrp pipeline failed: %s\n",
-            strerror(errno)
-        );
+    if (tcsetpgrp(STDIN_FILENO, pipeline_pgid) == -1) {
+        fprintf(stderr, "tcsetpgrp pipeline failed: %s\n", strerror(errno));
         return -1;
     }
 
@@ -565,39 +407,27 @@ int run_pipeline(
     while (remaining > 0) {
         int status;
 
-        pid_t result = waitpid(
-            -pipeline_pgid,
-            &status,
-            WUNTRACED
-        );
+        pid_t result = waitpid(-pipeline_pgid, &status, WUNTRACED);
 
         if (result == -1) {
             if (errno == EINTR) {
                 continue;
             }
 
-            fprintf(
-                stderr,
-                "pipeline waitpid failed: %s\n",
-                strerror(errno)
-            );
+            fprintf(stderr, "pipeline waitpid failed: %s\n", strerror(errno));
             break;
         }
 
         if (WIFSTOPPED(status)) {
-            printf(
-                "[shell] pipeline process %ld "
-                "stopped by signal %d\n",
-                (long)result,
-                WSTOPSIG(status)
-            );
+            printf("[shell] pipeline process %ld "
+                   "stopped by signal %d\n",
+                   (long)result, WSTOPSIG(status));
 
             stopped = 1;
             break;
         }
 
-        if (WIFEXITED(status) ||
-            WIFSIGNALED(status)) {
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
             --remaining;
         }
     }
@@ -605,40 +435,21 @@ int run_pipeline(
     /*
      * Shell takes the terminal back.
      */
-    if (tcsetpgrp(
-            STDIN_FILENO,
-            shell_pgid
-        ) == -1) {
-        fprintf(
-            stderr,
-            "tcsetpgrp shell failed: %s\n",
-            strerror(errno)
-        );
+    if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
+        fprintf(stderr, "tcsetpgrp shell failed: %s\n", strerror(errno));
         return -1;
     }
 
     if (stopped) {
-        if (cleanup_stopped_job(
-                pipeline_pgid
-            ) == -1) {
+        if (cleanup_stopped_job(pipeline_pgid) == -1) {
             return -1;
         }
 
-        while (
-            waitpid(
-                -pipeline_pgid,
-                NULL,
-                0
-            ) != -1
-        ) {
+        while (waitpid(-pipeline_pgid, NULL, 0) != -1) {
         }
 
         if (errno != ECHILD) {
-            fprintf(
-                stderr,
-                "cleanup waitpid failed: %s\n",
-                strerror(errno)
-            );
+            fprintf(stderr, "cleanup waitpid failed: %s\n", strerror(errno));
             return -1;
         }
     }
@@ -647,4 +458,3 @@ int run_pipeline(
 
     return 0;
 }
-

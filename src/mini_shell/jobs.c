@@ -7,14 +7,10 @@
 
 #include "mini_shell.h"
 
-struct Job *find_job_by_id(
-    struct Job jobs[],
-    int id
-)
+struct Job *find_job_by_id(struct Job jobs[], int id)
 {
     for (size_t i = 0; i < MAX_JOBS; ++i) {
-        if (jobs[i].used &&
-            jobs[i].id == id) {
+        if (jobs[i].used && jobs[i].id == id) {
             return &jobs[i];
         }
     }
@@ -22,23 +18,14 @@ struct Job *find_job_by_id(
     return NULL;
 }
 
-int foreground_job(
-    struct Job *job,
-    pid_t shell_pgid
-)
+int foreground_job(struct Job *job, pid_t shell_pgid)
 {
     /*
      * Give the terminal to the job first.
      */
-    if (tcsetpgrp(
-            STDIN_FILENO,
-            job->pgid
-        ) == -1) {
-        fprintf(
-            stderr,
-            "mini-shell: fg: tcsetpgrp failed: %s\n",
-            strerror(errno)
-        );
+    if (tcsetpgrp(STDIN_FILENO, job->pgid) == -1) {
+        fprintf(stderr, "mini-shell: fg: tcsetpgrp failed: %s\n",
+                strerror(errno));
         return -1;
     }
 
@@ -48,26 +35,18 @@ int foreground_job(
      */
     if (job->state == JOB_STOPPED) {
         if (kill(-job->pgid, SIGCONT) == -1) {
-            fprintf(
-                stderr,
-                "mini-shell: fg: SIGCONT failed: %s\n",
-                strerror(errno)
-            );
+            fprintf(stderr, "mini-shell: fg: SIGCONT failed: %s\n",
+                    strerror(errno));
 
             /*
              * Give the terminal back to the shell
              * before returning.
              */
-            if (tcsetpgrp(
-                    STDIN_FILENO,
-                    shell_pgid
-                ) == -1) {
-                fprintf(
-                    stderr,
-                    "mini-shell: fg: "
-                    "could not reclaim terminal: %s\n",
-                    strerror(errno)
-                );
+            if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
+                fprintf(stderr,
+                        "mini-shell: fg: "
+                        "could not reclaim terminal: %s\n",
+                        strerror(errno));
             }
 
             return -1;
@@ -80,22 +59,15 @@ int foreground_job(
     int wait_failed = 0;
 
     for (;;) {
-        pid_t result = waitpid(
-            -job->pgid,
-            &status,
-            WUNTRACED
-        );
+        pid_t result = waitpid(-job->pgid, &status, WUNTRACED);
 
         if (result == -1) {
             if (errno == EINTR) {
                 continue;
             }
 
-            fprintf(
-                stderr,
-                "mini-shell: fg: waitpid failed: %s\n",
-                strerror(errno)
-            );
+            fprintf(stderr, "mini-shell: fg: waitpid failed: %s\n",
+                    strerror(errno));
 
             wait_failed = 1;
         }
@@ -106,16 +78,11 @@ int foreground_job(
     /*
      * Shell takes the terminal back.
      */
-    if (tcsetpgrp(
-            STDIN_FILENO,
-            shell_pgid
-        ) == -1) {
-        fprintf(
-            stderr,
-            "mini-shell: fg: "
-            "could not reclaim terminal: %s\n",
-            strerror(errno)
-        );
+    if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
+        fprintf(stderr,
+                "mini-shell: fg: "
+                "could not reclaim terminal: %s\n",
+                strerror(errno));
         return -1;
     }
 
@@ -126,30 +93,18 @@ int foreground_job(
     if (WIFSTOPPED(status)) {
         job->state = JOB_STOPPED;
 
-        printf(
-            "[%d] Stopped    %s\n",
-            job->id,
-            job->command
-        );
-    } else if (
-        WIFEXITED(status) ||
-        WIFSIGNALED(status)
-    ) {
+        printf("[%d] Stopped    %s\n", job->id, job->command);
+    } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
         job->used = 0;
     }
 
     return 0;
 }
 
-int background_job(
-    struct Job *job
-)
+int background_job(struct Job *job)
 {
     if (job->state != JOB_STOPPED) {
-        fprintf(
-            stderr,
-            "mini-shell: bg: job is not stopped\n"
-        );
+        fprintf(stderr, "mini-shell: bg: job is not stopped\n");
         return -1;
     }
 
@@ -157,28 +112,19 @@ int background_job(
      * Send SIGCONT to the whole process group.
      */
     if (kill(-job->pgid, SIGCONT) == -1) {
-        fprintf(
-            stderr,
-            "mini-shell: bg: SIGCONT failed: %s\n",
-            strerror(errno)
-        );
+        fprintf(stderr, "mini-shell: bg: SIGCONT failed: %s\n",
+                strerror(errno));
         return -1;
     }
 
     job->state = JOB_RUNNING;
 
-    printf(
-        "[%d] Running    %s\n",
-        job->id,
-        job->command
-    );
+    printf("[%d] Running    %s\n", job->id, job->command);
 
     return 0;
 }
 
-void print_jobs(
-    const struct Job jobs[]
-)
+void print_jobs(const struct Job jobs[])
 {
     for (size_t i = 0; i < MAX_JOBS; ++i) {
         if (!jobs[i].used) {
@@ -186,26 +132,14 @@ void print_jobs(
         }
 
         const char *state =
-            jobs[i].state == JOB_RUNNING
-                ? "Running"
-                : "Stopped";
+            jobs[i].state == JOB_RUNNING ? "Running" : "Stopped";
 
-        printf(
-            "[%d] %-8s %s\n",
-            jobs[i].id,
-            state,
-            jobs[i].command
-        );
+        printf("[%d] %-8s %s\n", jobs[i].id, state, jobs[i].command);
     }
 }
 
-int add_job(
-    struct Job jobs[],
-    int *next_job_id,
-    pid_t pgid,
-    size_t process_count,
-    char *argv[]
-)
+int add_job(struct Job jobs[], int *next_job_id, pid_t pgid,
+            size_t process_count, char *argv[])
 {
     for (size_t i = 0; i < MAX_JOBS; ++i) {
         if (jobs[i].used) {
@@ -223,13 +157,9 @@ int add_job(
         size_t offset = 0;
 
         for (size_t j = 0; argv[j] != NULL; ++j) {
-            int written = snprintf(
-                jobs[i].command + offset,
-                sizeof(jobs[i].command) - offset,
-                "%s%s",
-                j == 0 ? "" : " ",
-                argv[j]
-            );
+            int written = snprintf(jobs[i].command + offset,
+                                   sizeof(jobs[i].command) - offset, "%s%s",
+                                   j == 0 ? "" : " ", argv[j]);
 
             if (written < 0) {
                 jobs[i].command[0] = '\0';
@@ -238,8 +168,7 @@ int add_job(
 
             size_t amount = (size_t)written;
 
-            if (amount >=
-                sizeof(jobs[i].command) - offset) {
+            if (amount >= sizeof(jobs[i].command) - offset) {
                 break;
             }
 
@@ -252,9 +181,7 @@ int add_job(
     return -1;
 }
 
-void reap_background_children(
-    struct Job jobs[]
-)
+void reap_background_children(struct Job jobs[])
 {
     for (size_t i = 0; i < MAX_JOBS; ++i) {
         if (!jobs[i].used) {
@@ -276,11 +203,7 @@ void reap_background_children(
              * Negative PGID means:
              * wait for any child in this process group.
              */
-            pid_t pid = waitpid(
-                -jobs[i].pgid,
-                &status,
-                WNOHANG
-            );
+            pid_t pid = waitpid(-jobs[i].pgid, &status, WNOHANG);
 
             if (pid == 0) {
                 break;
@@ -295,28 +218,19 @@ void reap_background_children(
                     break;
                 }
 
-                fprintf(
-                    stderr,
-                    "background waitpid failed: %s\n",
-                    strerror(errno)
-                );
+                fprintf(stderr, "background waitpid failed: %s\n",
+                        strerror(errno));
                 break;
             }
 
             if (WIFEXITED(status)) {
-                printf(
-                    "[shell] background pid=%ld "
-                    "exited with status %d\n",
-                    (long)pid,
-                    WEXITSTATUS(status)
-                );
+                printf("[shell] background pid=%ld "
+                       "exited with status %d\n",
+                       (long)pid, WEXITSTATUS(status));
             } else if (WIFSIGNALED(status)) {
-                printf(
-                    "[shell] background pid=%ld "
-                    "terminated by signal %d\n",
-                    (long)pid,
-                    WTERMSIG(status)
-                );
+                printf("[shell] background pid=%ld "
+                       "terminated by signal %d\n",
+                       (long)pid, WTERMSIG(status));
             }
 
             if (jobs[i].remaining > 0) {
@@ -328,11 +242,7 @@ void reap_background_children(
              * in its process group has exited.
              */
             if (jobs[i].remaining == 0) {
-                printf(
-                    "[%d] Done    %s\n",
-                    jobs[i].id,
-                    jobs[i].command
-                );
+                printf("[%d] Done    %s\n", jobs[i].id, jobs[i].command);
 
                 jobs[i].used = 0;
                 break;
@@ -340,4 +250,3 @@ void reap_background_children(
         }
     }
 }
-

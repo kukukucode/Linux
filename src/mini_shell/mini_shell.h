@@ -9,10 +9,7 @@
 #define MAX_JOBS 16
 #define MAX_JOB_COMMAND 256
 
-enum JobState {
-    JOB_RUNNING,
-    JOB_STOPPED
-};
+enum JobState { JOB_RUNNING, JOB_STOPPED };
 
 struct Job {
     int used;
@@ -37,62 +34,29 @@ struct ParsedLine {
     int background;
 };
 
-int parse_line(
-    char *line,
-    struct ParsedLine *parsed
-);
+int parse_line(char *line, struct ParsedLine *parsed);
 
-struct Job *find_job_by_id(
-    struct Job jobs[],
-    int id
-);
+struct Job *find_job_by_id(struct Job jobs[], int id);
 
-int foreground_job(
-    struct Job *job,
-    pid_t shell_pgid
-);
+int foreground_job(struct Job *job, pid_t shell_pgid);
 
-int background_job(
-    struct Job *job
-);
+int background_job(struct Job *job);
 
-void print_jobs(
-    const struct Job jobs[]
-);
+void print_jobs(const struct Job jobs[]);
 
-int add_job(
-    struct Job jobs[],
-    int *next_job_id,
-    pid_t pgid,
-    size_t process_count,
-    char *argv[]
-);
+int add_job(struct Job jobs[], int *next_job_id, pid_t pgid,
+            size_t process_count, char *argv[]);
 
-void reap_background_children(
-    struct Job jobs[]
-);
+void reap_background_children(struct Job jobs[]);
 
-int set_signal(
-    int signal_number,
-    void (*handler)(int)
-);
+int set_signal(int signal_number, void (*handler)(int));
 
-int run_command(
-    char *argv[],
-    pid_t shell_pgid,
-    const char *input_path,
-    const char *output_path,
-    int background,
-    struct Job jobs[],
-    int *next_job_id
-);
+int run_command(char *argv[], pid_t shell_pgid, const char *input_path,
+                const char *output_path, int background, struct Job jobs[],
+                int *next_job_id);
 
-int run_pipeline(
-    char *commands[][MAX_ARGS],
-    size_t command_count,
-    pid_t shell_pgid,
-    const char *input_path,
-    const char *output_path
-);
+int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
+                 pid_t shell_pgid, const char *input_path,
+                 const char *output_path);
 
 #endif
