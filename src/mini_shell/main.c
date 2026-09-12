@@ -8,24 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_ARGS 64
-#define MAX_COMMANDS 16
-#define MAX_JOBS 16
-#define MAX_JOB_COMMAND 256
-
-enum JobState {
-    JOB_RUNNING,
-    JOB_STOPPED
-};
-
-struct Job {
-    int used;
-    int id;
-    pid_t pgid;
-    enum JobState state;
-    size_t remaining;
-    char command[MAX_JOB_COMMAND];
-};
+#include "mini_shell.h"
 
 static struct Job *find_job_by_id(
     struct Job jobs[],
