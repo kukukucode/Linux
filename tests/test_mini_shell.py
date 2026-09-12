@@ -10,6 +10,8 @@ import time
 
 SHELL = "./build/mini_shell"
 PROMPT = b"mini$ "
+CTRL_C = b"\x03"
+CTRL_Z = b"\x1a"
 
 
 def read_until(fd, marker, timeout=5):
@@ -128,6 +130,67 @@ def main():
             os.unlink(temp_path)
         except FileNotFoundError:
             pass
+
+        # Job control:
+        # Ctrl-Z -> jobs -> bg -> fg -> Ctrl-C
+        send(fd, "sleep 30")
+
+        # Give the shell enough time to hand the terminal
+        # to the child process group.
+        time.sleep(0.2)
+
+        os.write(fd, CTRL_Z)
+
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Stopped    sleep 30",
+            "Ctrl-Z stops foreground job",
+        )
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Stopped  sleep 30",
+            "jobs shows stopped job",
+        )
+
+        send(fd, "bg 1")
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Running    sleep 30",
+            "bg resumes stopped job",
+        )
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+        require(
+            output,
+            "Running  sleep 30",
+            "jobs shows running job",
+        )
+
+        send(fd, "fg 1")
+
+        # fg transfers the terminal back to the job.
+        time.sleep(0.2)
+
+        os.write(fd, CTRL_C)
+
+        # The shell should reclaim the terminal and print
+        # another prompt after sleep is terminated.
+        read_until(fd, PROMPT)
+
+        send(fd, "jobs")
+        output = read_until(fd, PROMPT)
+
+        if "sleep 30" in output:
+            raise RuntimeError(
+                "finished foreground job remained in jobs\n"
+                "output:\n{}".format(output)
+            )
 
         send(fd, "exit")
 
