@@ -53,4 +53,27 @@ void reap_background_children(
     struct Job jobs[]
 );
 
+int set_signal(
+    int signal_number,
+    void (*handler)(int)
+);
+
+int run_command(
+    char *argv[],
+    pid_t shell_pgid,
+    const char *input_path,
+    const char *output_path,
+    int background,
+    struct Job jobs[],
+    int *next_job_id
+);
+
+int run_pipeline(
+    char *commands[][MAX_ARGS],
+    size_t command_count,
+    pid_t shell_pgid,
+    const char *input_path,
+    const char *output_path
+);
+
 #endif
