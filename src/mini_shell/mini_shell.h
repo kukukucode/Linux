@@ -38,6 +38,8 @@ int parse_line(char *line, struct ParsedLine *parsed);
 
 struct Job *find_job_by_id(struct Job jobs[], int id);
 
+int wait_for_process_group(pid_t pgid, size_t *remaining, int *stopped);
+
 int foreground_job(struct Job *job, pid_t shell_pgid);
 
 int background_job(struct Job *job);

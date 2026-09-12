@@ -490,67 +490,20 @@ int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
     }
 
     size_t remaining = command_count;
-    size_t stopped_count = 0;
-    int wait_failed = 0;
+    int stopped = 0;
+
+    int wait_result =
+        wait_for_process_group(pipeline_pgid, &remaining, &stopped);
 
     /*
-     * Wait for every process in the foreground pipeline.
-     *
-     * If Ctrl-Z stops the process group, keep collecting stop
-     * notifications until every still-live process has stopped.
-     */
-    while (remaining > 0) {
-        int status;
-        pid_t result;
-
-        for (;;) {
-            result = waitpid(-pipeline_pgid, &status, WUNTRACED);
-
-            if (result == -1 && errno == EINTR) {
-                continue;
-            }
-
-            break;
-        }
-
-        if (result == -1) {
-            fprintf(stderr, "pipeline waitpid failed: %s\n", strerror(errno));
-            wait_failed = 1;
-            break;
-        }
-
-        if (WIFEXITED(status) || WIFSIGNALED(status)) {
-            --remaining;
-
-            if (remaining == 0) {
-                break;
-            }
-
-            if (stopped_count >= remaining) {
-                break;
-            }
-
-            continue;
-        }
-
-        if (WIFSTOPPED(status)) {
-            ++stopped_count;
-
-            if (stopped_count >= remaining) {
-                break;
-            }
-        }
-    }
-
-    /*
-     * Shell takes the terminal back.
+     * Shell takes the terminal back even if waiting failed.
      */
     if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
         fprintf(stderr, "tcsetpgrp shell failed: %s\n", strerror(errno));
         return -1;
     }
 
-    if (wait_failed) {
+    if (wait_result == -1) {
         return -1;
     }
 
@@ -558,7 +511,7 @@ int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
      * Every still-live pipeline process is stopped.
      * Preserve the process group as a shell job.
      */
-    if (remaining > 0 && stopped_count >= remaining) {
+    if (stopped) {
         char command[MAX_JOB_COMMAND];
 
         format_pipeline_command(command, sizeof(command), commands,
