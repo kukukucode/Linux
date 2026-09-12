@@ -102,6 +102,25 @@ static int cleanup_stopped_job(pid_t pgid)
     return 0;
 }
 
+static int set_child_process_group(pid_t pid, pid_t pgid)
+{
+    if (setpgid(pid, pgid) == -1) {
+        /*
+         * The child may have already called exec().
+         * In that case the parent's setpgid() loses the race,
+         * but the child's own setpgid() has already done the work.
+         */
+        if (errno == EACCES) {
+            return 0;
+        }
+
+        fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
 int run_command(char *argv[], pid_t shell_pgid, const char *input_path,
                 const char *output_path, int background, struct Job jobs[],
                 int *next_job_id)
@@ -143,8 +162,7 @@ int run_command(char *argv[], pid_t shell_pgid, const char *input_path,
         _exit(127);
     }
 
-    if (setpgid(child_pid, child_pid) == -1) {
-        fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
+    if (set_child_process_group(child_pid, child_pid) == -1) {
         return -1;
     }
     if (background) {
@@ -370,9 +388,7 @@ int run_pipeline(char *commands[][MAX_ARGS], size_t command_count,
          * Parent also calls setpgid()
          * to avoid relying on scheduling order.
          */
-        if (setpgid(pid, pipeline_pgid) == -1 && errno != EACCES) {
-            fprintf(stderr, "parent setpgid failed: %s\n", strerror(errno));
-
+        if (set_child_process_group(pid, pipeline_pgid) == -1) {
             close_all_pipes(pipes, pipe_count);
 
             kill(-pipeline_pgid, SIGTERM);
